@@ -1,0 +1,36 @@
+# Runtime state
+database/*.db
+database/*.db-wal
+database/*.db-shm
+
+# Runtime logs
+logs/*
+telemetry/*.log
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Termux / local environment
+.env
+.venv/
+# LeQutisOS runtime state
+state/*.db
+state/*.db-*
+state/*.db-shm
+state/*.db-wal
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Logs
+logs/*.log
+
+# Local secrets
+.env
+*.pem
+*.key
+*token*
+*secret*
+*password*
