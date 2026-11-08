@@ -1,16 +1,24 @@
-#!/data/data/com.termux/files/usr/bin/sh
+#!/usr/bin/env sh
 set -eu
-cd "$HOME/LeQutisOS"
+ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
 
-python core/lequtis.py init >/dev/null
+test_state="$(mktemp -d "$ROOT/.lequtis-smoke.XXXXXX")"
+trap 'rm -rf "$test_state"' EXIT HUP INT TERM
+export LEQUTIS_ROOT="$ROOT"
+export LEQUTIS_STATE="$test_state"
 
-python core/lequtis.py remember \
-"Initial LeQutis memory: A71 is the current build and runtime host." >/dev/null
+python3 core/lequtis.py init >/dev/null
+python3 core/lequtis.py remember "Disposable smoke-test memory." >/dev/null
+python3 core/lequtis.py goal "Remember a smoke-test note through the autonomous loop." >/dev/null
 
-python core/lequtis.py goal \
-"Build the first autonomous notice-think-act-learn loop." >/dev/null
+loop_result="$(python3 core/lequtis.py loop)"
+printf '%s\n' "$loop_result"
+printf '%s\n' "$loop_result" | python3 -c 'import json,sys; result=json.load(sys.stdin); assert result.get("status") == "completed", result'
 
-python core/lequtis.py heartbeat
+verify_result="$(python3 core/lequtis.py verify)"
+printf '%s\n' "$verify_result"
+printf '%s\n' "$verify_result" | python3 -c 'import json,sys; result=json.load(sys.stdin); assert result.get("ok") is True, result'
 
 echo
 echo "=== LEQUTIS SMOKE TEST: PASS ==="

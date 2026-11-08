@@ -66,6 +66,10 @@ python3 tests/test_skills_verifier_parity.py
 ./doctor.sh
 ```
 
+`doctor.sh` and `tests/smoke.sh` use disposable state and do not touch an
+existing LeQutis database. Use the read-only Hermes host preflight when checking
+an existing installation.
+
 Host vs phone roles: see repo-root `COMPUTER_REQUIREMENTS.md`.
 
 Disposable tests never touch production state. Set `LEQUTIS_STATE` to point at a temp directory.
