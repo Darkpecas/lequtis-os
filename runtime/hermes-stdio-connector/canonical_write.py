@@ -48,6 +48,10 @@ def canonical_commit(record):
         return {"ok": False, "reason": "canonical_write_disabled"}
     if not os.environ.get("LEQUTIS_STATE"):
         return {"ok": False, "reason": "explicit_state_required"}
+    # Host-side caller authentication must be independently enforced.
+    # Environment attestation is defense in depth, not authentication.
+    if os.environ.get("LEQUTIS_TRUSTED_LOCAL_TRANSPORT") != "1":
+        return {"ok": False, "reason": "trusted_transport_not_attested"}
     if not isinstance(record, dict):
         return {"ok": False, "reason": "invalid_record"}
     try:
