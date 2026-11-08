@@ -115,12 +115,47 @@ else:
     print("  PASS")
 
 
+
+def test_store_note_retry_does_not_duplicate_memory(state: Path) -> None:
+    print("TEST WORKERS: task retry reuses the same note memory")
+    L = load_L(state)
+    agenda_id = L.add_goal("Remember a retry-safe note", priority=50)
+    choice = {
+        "kind": "goal",
+        "action": "store_note",
+        "agenda_id": agenda_id,
+        "title": "Remember a retry-safe note",
+        "reason": "idempotency test",
+        "idempotency_key": f"goal:{agenda_id}:store_note",
+        "payload": {"note": "one memory across retries"},
+    }
+    with L.connect() as db:
+        db.execute(
+            """CREATE TRIGGER fail_task_completion
+               BEFORE UPDATE ON tasks WHEN NEW.status='completed'
+               BEGIN SELECT RAISE(ABORT, 'injected post-action failure'); END"""
+        )
+    first = L.act(choice)
+    assert first["ok"] is False, first
+    with L.connect() as db:
+        db.execute("DROP TRIGGER fail_task_completion")
+    second = L.act(choice)
+    assert second["ok"] is True, second
+    with L.connect() as db:
+        rows = db.execute(
+            "SELECT id FROM memory WHERE content=?", ("one memory across retries",)
+        ).fetchall()
+    assert len(rows) == 1, rows
+    print("  PASS")
+
+
 def main() -> int:
     base = Path(tempfile.mkdtemp(prefix="lequtis-workers-"))
     try:
         test_deterministic_default(base / "a")
         test_script_worker_think_choose(base / "b")
         test_unsafe_worker_proposal_rejected(base / "c")
+        test_store_note_retry_does_not_duplicate_memory(base / "d")
         print()
         print("=== LEQUTIS WORKER TESTS: ALL PASS ===")
         return 0
