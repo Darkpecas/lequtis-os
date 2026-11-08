@@ -119,7 +119,7 @@ def test_stdio_subprocess_framing(state: Path) -> None:
          "params": {"protocolVersion": "2024-11-05", "capabilities": {}}},
         {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
     ]
-    wire = "".join(json.dumps(m, separators=(",", ":")) + "\\n" for m in messages)
+    wire = "".join(json.dumps(m, separators=(",", ":")) + "\n" for m in messages)
     proc = subprocess.run(
         [sys.executable, str(CONNECTOR / "lequtis_mcp_stdio.py")],
         input=wire, text=True, capture_output=True, timeout=5, env=env, check=True,
