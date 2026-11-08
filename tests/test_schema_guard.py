@@ -1,6 +1,7 @@
 """Fail closed when an existing database does not match this kernel revision."""
 import hashlib
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -52,6 +53,54 @@ class SchemaGuardTests(unittest.TestCase):
             self.assertEqual(made.returncode, 0, made.stderr + made.stdout)
             self.assertIn("lequtis-os-kernel-3", made.stdout)
             self.assertIn("LOCAL PROOF, NOT LIVE VPS VERIFIED", made.stdout)
+
+    def test_uncheckpointed_wal_revision_is_accepted_and_original_bytes_stay(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "wal.db"
+            env = os.environ.copy()
+            env["LEQUTIS_DB"] = str(db)
+            base = sqlite3.connect(db)
+            base.execute("PRAGMA journal_mode=WAL")
+            base.execute(
+                "CREATE TABLE identity (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+            )
+            base.commit()
+            base.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            holder = sqlite3.connect(db)
+            holder.execute("BEGIN")
+            holder.execute("SELECT key FROM identity").fetchall()
+            writer = sqlite3.connect(db)
+            writer.execute("PRAGMA wal_autocheckpoint=0")
+            schema = (ROOT / "database" / "schema.sql").read_text(encoding="utf-8")
+            writer.executescript(schema)
+            writer.execute(
+                "INSERT INTO identity(key,value) VALUES (?,?)",
+                ("schema_revision", "lequtis-os-kernel-3"),
+            )
+            writer.commit()
+            writer.close()
+            try:
+                stale = sqlite3.connect(
+                    "file:" + str(db.resolve()) + "?mode=ro&immutable=1", uri=True
+                )
+                try:
+                    stale_tables = {
+                        row[0]
+                        for row in stale.execute(
+                            "SELECT name FROM sqlite_master WHERE type='table'"
+                        )
+                    }
+                finally:
+                    stale.close()
+                self.assertNotIn("executions", stale_tables)
+                accepted = subprocess.run(
+                    [sys.executable, str(KERNEL), "status"],
+                    env=env, text=True, capture_output=True,
+                )
+            finally:
+                holder.close()
+            self.assertEqual(accepted.returncode, 0, accepted.stderr + accepted.stdout)
+            self.assertIn("lequtis-os-kernel-3", accepted.stdout)
 
 
 if __name__ == "__main__":

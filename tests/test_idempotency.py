@@ -57,6 +57,46 @@ class IdempotencyTests(unittest.TestCase):
             self.assertEqual(db.execute("SELECT COUNT(*) FROM memory").fetchone()[0], before)
             self.assertEqual(db.execute("SELECT COUNT(*) FROM agenda").fetchone()[0], agendas)
 
+    def test_concurrent_same_key_does_not_error(self):
+        self.run_cli("init")
+        commands = [
+            [sys.executable, str(CLI), "goal", "--key", "race-1", "remember: one local fact"],
+            [sys.executable, str(CLI), "goal", "--key", "race-1", "remember: one local fact"],
+        ]
+        procs = [
+            subprocess.Popen(cmd, env=self.env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            for cmd in commands
+        ]
+        results = [proc.communicate(timeout=15) for proc in procs]
+        for proc, (stdout, stderr) in zip(procs, results):
+            self.assertEqual(proc.returncode, 0, stdout + stderr)
+            self.assertNotIn("IntegrityError", stdout + stderr)
+        with sqlite3.connect(self.db) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM agenda").fetchone()[0], 1)
+
+    def test_concurrent_changed_title_conflicts_without_integrity_error(self):
+        self.run_cli("init")
+        commands = [
+            [sys.executable, str(CLI), "goal", "--key", "race-2", "remember: original"],
+            [sys.executable, str(CLI), "goal", "--key", "race-2", "remember: altered"],
+        ]
+        procs = [
+            subprocess.Popen(cmd, env=self.env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            for cmd in commands
+        ]
+        results = [proc.communicate(timeout=15) for proc in procs]
+        codes = []
+        for proc, (stdout, stderr) in zip(procs, results):
+            codes.append(proc.returncode)
+            self.assertNotIn("IntegrityError", stdout + stderr)
+            if proc.returncode != 0:
+                body = json.loads(stdout)
+                self.assertEqual(body["status"], "conflict")
+                self.assertEqual(body["error"], "idempotency_key_reused_with_different_request")
+        self.assertEqual(sorted(codes), [0, 1])
+        with sqlite3.connect(self.db) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM agenda").fetchone()[0], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

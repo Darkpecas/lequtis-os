@@ -5,6 +5,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -54,6 +55,36 @@ class VerifierTests(unittest.TestCase):
         self.assertEqual(claimed, "accepted")
         self.assertEqual(execution, "failed")
         self.assertNotEqual(agenda, "complete")
+
+    def test_symlink_artifact_is_not_followed(self):
+        env = self.env.copy()
+        pause = Path(self.temp.name) / "pause"
+        outside = Path(self.temp.name) / "outside.txt"
+        outside.write_text("keep-me", encoding="utf-8")
+        env["LEQUTIS_PAUSE_AFTER_CLAIM"] = str(pause)
+        subprocess.run(
+            [sys.executable, str(CLI), "goal", "remember: do not follow a link"],
+            env=env, check=True, text=True, capture_output=True,
+        )
+        proc = subprocess.Popen(
+            [sys.executable, str(CLI), "run-once"],
+            env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        claimed = pause / "claimed"
+        deadline = time.time() + 15
+        while time.time() < deadline and not claimed.exists():
+            self.assertIsNone(proc.poll())
+            time.sleep(0.02)
+        self.assertTrue(claimed.exists())
+        info = json.loads(claimed.read_text(encoding="utf-8"))
+        link = Path(env["LEQUTIS_ARTIFACT_ROOT"]) / info["artifact_relpath"]
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(outside)
+        (pause / "release").write_text("go", encoding="utf-8")
+        stdout, stderr = proc.communicate(timeout=15)
+        self.assertEqual(proc.returncode, 1, stdout + stderr)
+        self.assertEqual(outside.read_text(encoding="utf-8"), "keep-me")
+        self.assertTrue(link.is_symlink())
 
 
 if __name__ == "__main__":

@@ -18,9 +18,11 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from datetime import datetime, timezone
@@ -111,8 +113,26 @@ def _schema_refuse(message: str) -> None:
 
 
 def _require_compatible() -> None:
-    """Read an existing database without writing. Exit 3 when it is not this revision."""
-    uri = "file:" + str(DB.resolve()) + "?mode=ro&immutable=1"
+    """Read an existing database without writing. Exit 3 when it is not this revision.
+
+    The check opens a copy, including any WAL, so a committed but uncheckpointed
+    schema is visible. ``immutable=1`` would ignore that WAL, and opening the
+    original ``mode=ro`` can create a new WAL file beside it.
+    """
+    with tempfile.TemporaryDirectory(prefix="lequtis-schema-guard-") as tmp:
+        snap = Path(tmp) / "snapshot.db"
+        shutil.copy2(DB, snap)
+        for suffix in ("-wal", "-shm"):
+            side = Path(str(DB) + suffix)
+            try:
+                shutil.copy2(side, Path(str(snap) + suffix))
+            except FileNotFoundError:
+                continue
+        _require_snapshot(snap)
+
+
+def _require_snapshot(snap: Path) -> None:
+    uri = "file:" + str(snap.resolve()) + "?mode=ro"
     try:
         db = sqlite3.connect(uri, uri=True)
     except sqlite3.OperationalError as exc:
@@ -315,8 +335,11 @@ def init() -> None:
                 (k, defaults[k]),
             )
     # Commit first. A checkpoint inside the open write transaction returns
-    # "database table is locked", and an immutable reader does not see a WAL.
-    db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    # "database table is locked", and a reader can keep TRUNCATE from finishing.
+    try:
+        db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except sqlite3.OperationalError:
+        pass
     db.close()
 
 
@@ -447,43 +470,64 @@ def request_hash(title: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _goal_outcome(existing: sqlite3.Row, title: str, digest: str | None) -> dict[str, Any]:
+    if existing["title"] != title or existing["request_hash"] != digest:
+        return {
+            "status": "conflict",
+            "agenda_id": existing["id"],
+            "error": "idempotency_key_reused_with_different_request",
+            "evidence_label": EVIDENCE_LABEL,
+        }
+    return {
+        "status": "duplicate",
+        "agenda_id": existing["id"],
+        "evidence_label": EVIDENCE_LABEL,
+    }
+
+
 def record_goal(
     title: str,
     priority: int = 10,
     idempotency_key: str | None = None,
 ) -> dict[str, Any]:
     """Create one agenda row. The same key and title replays; a different title conflicts."""
-    if idempotency_key:
-        with connect() as db:
+    gid = str(uuid.uuid4())
+    ts = now()
+    digest = request_hash(title) if idempotency_key else None
+    db = connect()
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        if idempotency_key:
             existing = db.execute(
                 "SELECT id, title, request_hash FROM agenda WHERE idempotency_key=?",
                 (idempotency_key,),
             ).fetchone()
-        if existing is not None:
-            if existing["title"] != title or existing["request_hash"] != request_hash(title):
-                return {
-                    "status": "conflict",
-                    "agenda_id": existing["id"],
-                    "error": "idempotency_key_reused_with_different_request",
-                    "evidence_label": EVIDENCE_LABEL,
-                }
-            return {
-                "status": "duplicate",
-                "agenda_id": existing["id"],
-                "evidence_label": EVIDENCE_LABEL,
-            }
-    gid = str(uuid.uuid4())
-    ts = now()
-    digest = request_hash(title) if idempotency_key else None
-    with connect() as db:
-        db.execute(
-            """
-            INSERT INTO agenda
-            (id,title,status,priority,created,updated,idempotency_key,request_hash)
-            VALUES (?,?,?,?,?,?,?,?)
-            """,
-            (gid, title, "open", priority, ts, ts, idempotency_key, digest),
-        )
+            if existing is not None:
+                db.rollback()
+                return _goal_outcome(existing, title, digest)
+        try:
+            db.execute(
+                """
+                INSERT INTO agenda
+                (id,title,status,priority,created,updated,idempotency_key,request_hash)
+                VALUES (?,?,?,?,?,?,?,?)
+                """,
+                (gid, title, "open", priority, ts, ts, idempotency_key, digest),
+            )
+        except sqlite3.IntegrityError:
+            existing = None
+            if idempotency_key:
+                existing = db.execute(
+                    "SELECT id, title, request_hash FROM agenda WHERE idempotency_key=?",
+                    (idempotency_key,),
+                ).fetchone()
+            db.rollback()
+            if existing is None:
+                raise
+            return _goal_outcome(existing, title, digest)
+        db.commit()
+    finally:
+        db.close()
     event(
         "agenda.created",
         {"id": gid, "title": title, "idempotency_key": idempotency_key},
@@ -1543,6 +1587,28 @@ def artifact_root() -> Path:
     return Path(override).expanduser() if override else DB.parent / "artifacts"
 
 
+def _write_new_file(path: Path, data: bytes) -> None:
+    """Create ``path`` without following a symlink or truncating an existing file."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(path, flags, 0o644)
+    except FileExistsError as exc:
+        raise RuntimeError("artifact path already exists") from exc
+    except OSError as exc:
+        raise RuntimeError("artifact path is not a new file") from exc
+    try:
+        view = memoryview(data)
+        while view:
+            written = os.write(fd, view)
+            if written <= 0:
+                raise RuntimeError("artifact write failed")
+            view = view[written:]
+    finally:
+        os.close(fd)
+
+
 def canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
@@ -1583,22 +1649,33 @@ def process_is_live(pid: int | None, expected_start: str | None) -> bool:
 
 
 def _semantic_for_execution(content: str, agenda_id: str) -> str:
+    """One semantic row per agenda item, reused when a later attempt retries."""
+    mid = str(uuid.uuid5(uuid.NAMESPACE_URL, "lequtis:run-once-semantic:" + agenda_id))
     with connect() as db:
         row = db.execute(
-            """
-            SELECT id FROM memory
-            WHERE kind='semantic' AND content=?
-            ORDER BY rowid LIMIT 1
-            """,
-            (content,),
+            "SELECT kind, content FROM memory WHERE id=?",
+            (mid,),
         ).fetchone()
     if row is not None:
+        if row["kind"] != "semantic" or row["content"] != content:
+            raise RuntimeError("Action memory key conflicts with stored content")
         event(
             "memory.reused",
-            {"id": row["id"], "kind": "semantic", "agenda_id": agenda_id},
+            {"id": mid, "kind": "semantic", "agenda_id": agenda_id},
         )
-        return row["id"]
-    return remember(content, "semantic")
+        return mid
+    ts = now()
+    with connect() as db:
+        db.execute(
+            """
+            INSERT INTO memory(id,kind,content,created,updated)
+            VALUES (?,?,?,?,?)
+            """,
+            (mid, "semantic", content, ts, ts),
+        )
+    # The first insert is not tagged with agenda_id. The retry event is.
+    event("memory.created", {"id": mid, "kind": "semantic"})
+    return mid
 
 
 def _experience_for_execution(content: str, agenda_id: str) -> str:
@@ -1746,6 +1823,7 @@ def _pause_after_claim(task: dict[str, Any]) -> None:
             "execution_id": task["id"],
             "lease_token": task["lease_token"],
             "pid": os.getpid(),
+            "artifact_relpath": task["artifact_relpath"],
         }),
         encoding="utf-8",
     )
@@ -1821,19 +1899,20 @@ def run_once() -> dict[str, Any]:
         path = root / task["artifact_relpath"]
         if not ARTIFACT_NAME.fullmatch(path.name):
             raise RuntimeError("artifact path is not allowlisted")
-        path.write_bytes(
-            b"corrupt\n" if os.environ.get("LEQUTIS_CORRUPT_ARTIFACT") == "1" else document
-        )
+        payload = b"corrupt\n" if os.environ.get("LEQUTIS_CORRUPT_ARTIFACT") == "1" else document
+        _write_new_file(path, payload)
         (root / "receipts").mkdir(exist_ok=True)
         receipt = root / "receipts" / (task["correlation_id"] + "-stdout.txt")
-        receipt.write_text(
-            EVIDENCE_LABEL
-            + "\nartifact correlation_id="
-            + task["correlation_id"]
-            + " sha256="
-            + digest
-            + "\n",
-            encoding="utf-8",
+        _write_new_file(
+            receipt,
+            (
+                EVIDENCE_LABEL
+                + "\nartifact correlation_id="
+                + task["correlation_id"]
+                + " sha256="
+                + digest
+                + "\n"
+            ).encode("utf-8"),
         )
         verdict = _verify_independently(task, digest)
         if verdict.get("verdict") != "accepted":
@@ -1928,16 +2007,21 @@ def recover_interrupted() -> dict[str, Any]:
             continue
         recovered.append((row["id"], row["agenda_id"]))
     ts = now()
-    with connect() as db:
+    won: list[tuple[str, str]] = []
+    db = connect()
+    try:
+        db.execute("BEGIN IMMEDIATE")
         for execution_id, agenda_id in recovered:
-            db.execute(
+            changed = db.execute(
                 """
                 UPDATE executions
                 SET status='interrupted', error=?, completed_at=?, lease_token=NULL
                 WHERE id=? AND status='running'
                 """,
                 ("Process stopped before execution finished", ts, execution_id),
-            )
+            ).rowcount
+            if changed != 1:
+                continue
             db.execute(
                 """
                 UPDATE agenda SET status='blocked', updated=?
@@ -1945,13 +2029,17 @@ def recover_interrupted() -> dict[str, Any]:
                 """,
                 (ts, agenda_id),
             )
-    for execution_id, agenda_id in recovered:
+            won.append((execution_id, agenda_id))
+        db.commit()
+    finally:
+        db.close()
+    for execution_id, agenda_id in won:
         event("execution.interrupted", {
             "execution_id": execution_id, "agenda_id": agenda_id,
         })
         event("agenda.updated", {"agenda_id": agenda_id, "status": "blocked"})
     return {
-        "recovered": len(recovered),
+        "recovered": len(won),
         "live_skipped": skipped,
         "evidence_label": EVIDENCE_LABEL,
     }
