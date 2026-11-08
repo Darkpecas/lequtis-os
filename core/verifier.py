@@ -138,6 +138,11 @@ def verify_independent(
         # Disposable loops may use shorter event names — also accept
         # any payload that embeds this correlation_id.
         correlated = []
+        correlated_phases: set[str] = set()
+        required_phases = {
+            "NOTICE", "THINK", "CHOOSE", "ACT", "OBSERVE",
+            "EVALUATE", "LEARN", "REMEMBER", "UPDATE_AGENDA",
+        }
         for row in phase_events:
             payload = _loads(row["payload"])
             if isinstance(payload, dict) and (
@@ -146,10 +151,29 @@ def verify_independent(
                 == correlation_id
             ):
                 correlated.append(row["event_type"])
+                phase = payload.get("phase")
+                if row["event_type"] == "loop.phase" and phase in required_phases:
+                    correlated_phases.add(phase)
 
-        # Fall back: if loop_runs exists and chain ok, require task row match.
-        task_ok = True
+        # Require completion artifacts for this specific run, not merely an
+        # intact global ledger or an uncorrelated loop event from another run.
+        run_ok = run["status"] == "completed" and bool(run["task_id"])
+        required_correlated = {"loop.started", "loop.completed"}
+        correlated_ok = (
+            required_correlated.issubset(set(correlated))
+            and correlated_phases == required_phases
+        )
+        task_ok = run_ok and correlated_ok
         task_detail: dict[str, Any] = {}
+        if not run_ok:
+            task_detail["reason"] = "run_incomplete_or_task_missing"
+        if not correlated_ok:
+            task_detail["correlation_events_missing"] = sorted(
+                required_correlated - set(correlated)
+            )
+            task_detail["correlated_phases_missing"] = sorted(
+                required_phases - correlated_phases
+            )
         task_id = run["task_id"]
         if task_id:
             task = db.execute(
@@ -193,7 +217,7 @@ def verify_independent(
         findings.append(
             {
                 "severity": "loop_run",
-                "ok": True,
+                "ok": run_ok,
                 "correlation_id": correlation_id,
                 "phase": run["phase"],
                 "status": run["status"],
@@ -207,6 +231,8 @@ def verify_independent(
                 "ok": True,
                 "seen_loop_event_types": sorted(seen_types),
                 "correlated_events": correlated,
+                "correlated_phases": sorted(correlated_phases),
+                "correlated_phases_missing": sorted(required_phases - correlated_phases),
                 "missing_canonical_names": missing,
                 "note": "missing canonical names allowed if task+chain artifacts match",
             }
@@ -219,7 +245,7 @@ def verify_independent(
             }
         )
 
-        ok = task_ok and chain.get("ok") is True
+        ok = run_ok and correlated_ok and task_ok and chain.get("ok") is True
         return {
             "ok": ok,
             "mode": "independent",

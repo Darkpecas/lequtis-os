@@ -192,31 +192,22 @@ def call_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def _read_message() -> dict[str, Any] | None:
-    """MCP stdio framing: Content-Length header + JSON body."""
-    headers: dict[str, str] = {}
+    """Read one newline-delimited JSON-RPC message from MCP stdio."""
     while True:
         line = sys.stdin.buffer.readline()
         if not line:
             return None
-        if line in (b"\r\n", b"\n"):
-            break
-        if b":" in line:
-            key, value = line.decode("utf-8").split(":", 1)
-            headers[key.strip().lower()] = value.strip()
-    length = int(headers.get("content-length", "0"))
-    if length <= 0:
-        return None
-    body = sys.stdin.buffer.read(length)
-    if not body:
-        return None
-    return json.loads(body.decode("utf-8"))
+        if not line.strip():
+            continue
+        message = json.loads(line.decode("utf-8"))
+        if not isinstance(message, dict):
+            raise ValueError("MCP stdio message must be a JSON object")
+        return message
 
 
 def _write_message(msg: dict[str, Any]) -> None:
-    raw = json.dumps(msg, separators=(",", ":")).encode("utf-8")
-    sys.stdout.buffer.write(
-        f"Content-Length: {len(raw)}\r\n\r\n".encode("ascii") + raw
-    )
+    raw = json.dumps(msg, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    sys.stdout.buffer.write(raw + b"\n")
     sys.stdout.buffer.flush()
 
 

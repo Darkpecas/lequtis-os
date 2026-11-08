@@ -149,6 +149,32 @@ def test_store_note_retry_does_not_duplicate_memory(state: Path) -> None:
     print("  PASS")
 
 
+def test_resume_keeps_existing_task_identity(state: Path) -> None:
+    print("TEST WORKERS: resume keeps canonical task key and action")
+    sys.path.insert(0, str(CORE))
+    import workers
+
+    noticed = {
+        "unfinished_tasks": [{
+            "id": "task-existing", "status": "pending",
+            "action": "store_note", "idempotency_key": "canonical-key",
+        }]
+    }
+    candidate = workers.sanitize_candidate(
+        {"kind": "resume", "task_id": "task-existing",
+         "action": "store_note", "idempotency_key": "", "payload": {}},
+        noticed,
+    )
+    assert candidate is not None
+    assert candidate["idempotency_key"] == "canonical-key"
+    assert candidate["task_id"] == "task-existing"
+    assert workers.sanitize_candidate(
+        {"kind": "resume", "task_id": "task-existing",
+         "action": "ping", "idempotency_key": "other"}, noticed,
+    ) is None
+    print("  PASS")
+
+
 def main() -> int:
     base = Path(tempfile.mkdtemp(prefix="lequtis-workers-"))
     try:
@@ -156,6 +182,7 @@ def main() -> int:
         test_script_worker_think_choose(base / "b")
         test_unsafe_worker_proposal_rejected(base / "c")
         test_store_note_retry_does_not_duplicate_memory(base / "d")
+        test_resume_keeps_existing_task_identity(base / "e")
         print()
         print("=== LEQUTIS WORKER TESTS: ALL PASS ===")
         return 0

@@ -779,15 +779,18 @@ def run_loop(correlation_id: str | None = None) -> dict[str, Any]:
             "goals": len(noticed["open_goals"]),
             "unfinished": len(noticed["unfinished_tasks"]),
         }
+        event("loop.phase", {"correlation_id": correlation_id, "phase": "NOTICE"})
 
         candidates = think(noticed)
         evidence["phases"]["THINK"] = {"candidates": len(candidates)}
+        event("loop.phase", {"correlation_id": correlation_id, "phase": "THINK"})
 
         choice = choose(candidates)
         evidence["phases"]["CHOOSE"] = {
             "action": choice["action"],
             "kind": choice["kind"],
         }
+        event("loop.phase", {"correlation_id": correlation_id, "phase": "CHOOSE"})
 
         act_result = act(choice)
         evidence["phases"]["ACT"] = {
@@ -795,24 +798,36 @@ def run_loop(correlation_id: str | None = None) -> dict[str, Any]:
             "ok": act_result.get("ok"),
             "duplicate": act_result.get("duplicate"),
         }
+        event("loop.phase", {
+            "correlation_id": correlation_id, "phase": "ACT",
+            "task_id": act_result.get("task_id"), "ok": act_result.get("ok"),
+        })
 
         observation = observe(act_result)
         evidence["phases"]["OBSERVE"] = observation
+        event("loop.phase", {"correlation_id": correlation_id, "phase": "OBSERVE"})
 
         evaluation = evaluate(observation)
         evidence["phases"]["EVALUATE"] = {
             "verdict": evaluation["verdict"],
             "accepted": evaluation["accepted"],
         }
+        event("loop.phase", {
+            "correlation_id": correlation_id, "phase": "EVALUATE",
+            "accepted": evaluation["accepted"],
+        })
 
         learning = learn(evaluation)
         evidence["phases"]["LEARN"] = learning
+        event("loop.phase", {"correlation_id": correlation_id, "phase": "LEARN"})
 
         memory_id = remember_learning(learning)
         evidence["phases"]["REMEMBER"] = {"memory_id": memory_id}
+        event("loop.phase", {"correlation_id": correlation_id, "phase": "REMEMBER"})
 
         agenda_update = update_agenda_from_eval(evaluation)
         evidence["phases"]["UPDATE_AGENDA"] = agenda_update
+        event("loop.phase", {"correlation_id": correlation_id, "phase": "UPDATE_AGENDA"})
 
         final_status = "completed" if evaluation["accepted"] else "failed"
         with connect() as db:

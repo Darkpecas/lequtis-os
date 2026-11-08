@@ -147,6 +147,39 @@ def test_independent_verifier(state: Path) -> None:
         db.execute("DELETE FROM tasks WHERE id=?", (tid,))
     bad = L.verify_independent("verify-ind-1")
     assert bad["ok"] is False, bad
+
+    with L.connect() as db:
+        db.execute(
+            "INSERT INTO loop_runs (id,correlation_id,phase,status,task_id,evidence,created,updated) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            ("run-empty", "verify-empty-run", "NOTICE", "running", None, "{}",
+             "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"),
+        )
+    empty = L.verify_independent("verify-empty-run")
+    assert empty["ok"] is False, empty
+
+    # A completed task plus only start/end events is still not a full loop.
+    L.add_goal("Create a task for forged receipt check", priority=50)
+    good = L.run_loop(correlation_id="verify-good-run")
+    assert good["status"] == "completed", good
+    task_id = good["evidence"]["phases"]["ACT"]["task_id"]
+    with L.connect() as db:
+        db.execute(
+            "INSERT INTO loop_runs (id,correlation_id,phase,status,task_id,evidence,created,updated) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            ("run-forged", "verify-forged-run", "UPDATE_AGENDA", "completed",
+             task_id, '{"phases":{"ACT":{"ok":true}}}',
+             "2026-01-02T00:00:00Z", "2026-01-02T00:00:00Z"),
+        )
+    L.event("loop.started", {
+        "run_id": "run-forged", "correlation_id": "verify-forged-run"
+    })
+    L.event("loop.completed", {
+        "run_id": "run-forged", "correlation_id": "verify-forged-run",
+        "status": "completed",
+    })
+    forged = L.verify_independent("verify-forged-run")
+    assert forged["ok"] is False, forged
     print("  PASS")
 
 
