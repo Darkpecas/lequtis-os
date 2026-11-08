@@ -216,12 +216,15 @@ def handle(msg: dict[str, Any]) -> dict[str, Any] | None:
     method = msg.get("method")
     params = msg.get("params") or {}
 
+    # This adapter implements legacy MCP 2024-11-05 only. Never echo a
+    # modern (2026-07-28) version: it requires server/discover and per-request
+    # metadata, neither of which this adapter implements.
     if method == "initialize":
         return {
             "jsonrpc": "2.0",
             "id": mid,
             "result": {
-                "protocolVersion": params.get("protocolVersion", "2024-11-05"),
+                "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}},
                 "serverInfo": {
                     "name": "lequtis-hermes-stdio",
