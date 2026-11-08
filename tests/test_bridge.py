@@ -55,6 +55,24 @@ def test_initialize_and_tools_list(state: Path) -> None:
     print("  PASS")
 
 
+
+def test_version_negotiation_never_claims_modern(state: Path) -> None:
+    print("TEST BRIDGE: legacy version negotiation refuses false modern claim")
+    _, adapter = _prep(state)
+    for requested in ("2024-11-05", "2025-11-25", "2026-07-28", "2099-01-01"):
+        reply = adapter.handle({
+            "jsonrpc": "2.0", "id": 7, "method": "initialize",
+            "params": {"protocolVersion": requested, "capabilities": {}},
+        })
+        assert reply["result"]["protocolVersion"] == "2024-11-05", reply
+    discover = adapter.handle({
+        "jsonrpc": "2.0", "id": 8, "method": "server/discover",
+        "params": {"_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28"}},
+    })
+    assert discover["error"]["code"] == -32601, discover
+    print("  PASS")
+
+
 def test_status_and_chain(state: Path) -> None:
     print("TEST BRIDGE: status + valid chain")
     L, adapter = _prep(state)
@@ -137,6 +155,7 @@ def main() -> int:
     base = Path(tempfile.mkdtemp(prefix="lequtis-bridge-"))
     try:
         test_initialize_and_tools_list(base / "a")
+        test_version_negotiation_never_claims_modern(base / "version")
         test_status_and_chain(base / "b")
         test_query_disabled_and_no_synthetic_live(base / "c")
         test_tools_call_mcp_shape(base / "d")
