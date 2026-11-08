@@ -17,7 +17,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
+import shutil
 import sqlite3
+import subprocess
+import sys
+import tempfile
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,9 +35,53 @@ from typing import Any, Callable
 
 ROOT = Path(os.environ.get("LEQUTIS_ROOT", Path(__file__).resolve().parents[1]))
 STATE = Path(os.environ.get("LEQUTIS_STATE", ROOT / "state"))
-DB = STATE / "lequtis.db"
+# LEQUTIS_DB selects one file. When it is unset, the database stays
+# STATE/lequtis.db so LEQUTIS_STATE keeps its existing meaning.
+DB = Path(os.environ.get("LEQUTIS_DB", STATE / "lequtis.db")).expanduser()
+SCHEMA_REVISION = "lequtis-os-kernel-3"
+EVIDENCE_LABEL = "LOCAL PROOF, NOT LIVE VPS VERIFIED"
+VERIFIER = Path(__file__).with_name("verifier_main.py")
+ARTIFACT_NAME = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$"
+)
 
 STATE.mkdir(parents=True, exist_ok=True)
+
+REQUIRED_COLUMNS = {
+    "identity": {"key", "value"},
+    "memory": {"id", "kind", "content", "created", "updated"},
+    "agenda": {
+        "id", "title", "status", "priority", "created", "updated",
+        "idempotency_key", "request_hash",
+    },
+    "skills": {"id", "name", "version", "status", "evidence", "created", "updated"},
+    "events": {"seq", "event_id", "ts", "event_type", "payload", "previous_hash", "event_hash"},
+    "tasks": {
+        "id", "agenda_id", "idempotency_key", "title", "action", "status",
+        "payload", "result", "error", "created", "updated",
+    },
+    "loop_runs": {
+        "id", "correlation_id", "phase", "status", "task_id", "evidence",
+        "created", "updated",
+    },
+    "knowledge_sources": {
+        "id", "kind", "role", "location", "status", "meta", "created", "updated",
+    },
+    "knowledge_items": {
+        "id", "source_id", "path", "title", "content_hash", "excerpt",
+        "status", "created", "updated",
+    },
+    "executions": {
+        "id", "agenda_id", "attempt", "status", "action", "input", "result", "error",
+        "started_at", "completed_at", "claim_generation", "lease_token", "worker_pid",
+        "lease_proc_start", "correlation_id", "artifact_relpath", "expected_sha256",
+        "verifier_challenge", "claimed_verdict",
+    },
+    "verifier_observations": {
+        "id", "execution_id", "correlation_id", "artifact_path", "content_sha256",
+        "verdict", "reason", "verifier_pid", "worker_self_report_consulted", "created",
+    },
+}
 
 
 def now() -> str:
@@ -47,7 +97,73 @@ def connect() -> sqlite3.Connection:
     return db
 
 
+def _columns(db: sqlite3.Connection, table: str) -> set[str] | None:
+    rows = db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        (table,),
+    ).fetchall()
+    if not rows:
+        return None
+    return {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+
+
+def _schema_refuse(message: str) -> None:
+    sys.stderr.write(message + "\n")
+    raise SystemExit(3)
+
+
+def _require_compatible() -> None:
+    """Read an existing database without writing. Exit 3 when it is not this revision.
+
+    The check opens a copy, including any WAL, so a committed but uncheckpointed
+    schema is visible. ``immutable=1`` would ignore that WAL, and opening the
+    original ``mode=ro`` can create a new WAL file beside it.
+    """
+    with tempfile.TemporaryDirectory(prefix="lequtis-schema-guard-") as tmp:
+        snap = Path(tmp) / "snapshot.db"
+        shutil.copy2(DB, snap)
+        for suffix in ("-wal", "-shm"):
+            side = Path(str(DB) + suffix)
+            try:
+                shutil.copy2(side, Path(str(snap) + suffix))
+            except FileNotFoundError:
+                continue
+        _require_snapshot(snap)
+
+
+def _require_snapshot(snap: Path) -> None:
+    uri = "file:" + str(snap.resolve()) + "?mode=ro"
+    try:
+        db = sqlite3.connect(uri, uri=True)
+    except sqlite3.OperationalError as exc:
+        _schema_refuse(f"schema guard: {exc}")
+    db.row_factory = sqlite3.Row
+    try:
+        db.execute("PRAGMA query_only=ON")
+        for table, required in REQUIRED_COLUMNS.items():
+            found = _columns(db, table)
+            if found is None or not required.issubset(found):
+                missing = sorted(required if found is None else required - found)
+                _schema_refuse(
+                    "schema guard: incompatible database, not modified: "
+                    + table + " " + ",".join(missing)
+                )
+        row = db.execute(
+            "SELECT value FROM identity WHERE key='schema_revision'"
+        ).fetchone()
+        if row is None or row[0] != SCHEMA_REVISION:
+            found = None if row is None else row[0]
+            _schema_refuse(
+                f"schema guard: revision {found!r} is not {SCHEMA_REVISION}; database not modified"
+            )
+    finally:
+        db.close()
+
+
 def init() -> None:
+    if DB.exists():
+        _require_compatible()
+    DB.parent.mkdir(parents=True, exist_ok=True)
     with connect() as db:
         db.executescript(
             """
@@ -70,8 +186,13 @@ def init() -> None:
             status TEXT NOT NULL,
             priority INTEGER NOT NULL DEFAULT 0,
             created TEXT NOT NULL,
-            updated TEXT NOT NULL
+            updated TEXT NOT NULL,
+            idempotency_key TEXT,
+            request_hash TEXT
         );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_agenda_idempotency
+            ON agenda(idempotency_key) WHERE idempotency_key IS NOT NULL;
 
         CREATE TABLE IF NOT EXISTS skills (
             id TEXT PRIMARY KEY,
@@ -143,6 +264,42 @@ def init() -> None:
             UNIQUE(source_id, path),
             FOREIGN KEY(source_id) REFERENCES knowledge_sources(id)
         );
+
+        CREATE TABLE IF NOT EXISTS executions (
+            id TEXT PRIMARY KEY,
+            agenda_id TEXT NOT NULL REFERENCES agenda(id),
+            attempt INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            action TEXT NOT NULL,
+            input TEXT NOT NULL,
+            result TEXT,
+            error TEXT,
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            claim_generation INTEGER NOT NULL DEFAULT 0,
+            lease_token TEXT,
+            worker_pid INTEGER,
+            lease_proc_start TEXT,
+            correlation_id TEXT,
+            artifact_relpath TEXT,
+            expected_sha256 TEXT,
+            verifier_challenge TEXT,
+            claimed_verdict TEXT,
+            UNIQUE(agenda_id, attempt)
+        );
+
+        CREATE TABLE IF NOT EXISTS verifier_observations (
+            id TEXT PRIMARY KEY,
+            execution_id TEXT NOT NULL,
+            correlation_id TEXT,
+            artifact_path TEXT,
+            content_sha256 TEXT,
+            verdict TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            verifier_pid INTEGER NOT NULL,
+            worker_self_report_consulted INTEGER NOT NULL DEFAULT 0,
+            created TEXT NOT NULL
+        );
         """
         )
 
@@ -157,6 +314,8 @@ def init() -> None:
                 "frameworks and plugins are subordinate resources only."
             ),
             "milestone": "living-kernel-autonomous-loop",
+            "schema_revision": SCHEMA_REVISION,
+            "evidence_label": EVIDENCE_LABEL,
             "knowledge_map": (
                 "Body of work: GitHub lequtis-os, Google Docs/Drive, iCloud, "
                 "ChatGPT, Gemini, NotebookLM, Obsidian, personal graph SOPs."
@@ -175,6 +334,13 @@ def init() -> None:
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (k, defaults[k]),
             )
+    # Commit first. A checkpoint inside the open write transaction returns
+    # "database table is locked", and a reader can keep TRUNCATE from finishing.
+    try:
+        db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except sqlite3.OperationalError:
+        pass
+    db.close()
 
 
 # ---------------------------------------------------------------------------
@@ -293,19 +459,91 @@ def remember_for_task(content: str, kind: str, idempotency_key: str) -> str:
     return mid
 
 
-def add_goal(title: str, priority: int = 10) -> str:
+class IdempotencyConflict(Exception):
+    def __init__(self, outcome: dict[str, Any]) -> None:
+        super().__init__(outcome["error"])
+        self.outcome = outcome
+
+
+def request_hash(title: str) -> str:
+    raw = json.dumps({"title": title}, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _goal_outcome(existing: sqlite3.Row, title: str, digest: str | None) -> dict[str, Any]:
+    if existing["title"] != title or existing["request_hash"] != digest:
+        return {
+            "status": "conflict",
+            "agenda_id": existing["id"],
+            "error": "idempotency_key_reused_with_different_request",
+            "evidence_label": EVIDENCE_LABEL,
+        }
+    return {
+        "status": "duplicate",
+        "agenda_id": existing["id"],
+        "evidence_label": EVIDENCE_LABEL,
+    }
+
+
+def record_goal(
+    title: str,
+    priority: int = 10,
+    idempotency_key: str | None = None,
+) -> dict[str, Any]:
+    """Create one agenda row. The same key and title replays; a different title conflicts."""
     gid = str(uuid.uuid4())
     ts = now()
-    with connect() as db:
-        db.execute(
-            """
-            INSERT INTO agenda(id,title,status,priority,created,updated)
-            VALUES (?,?,?,?,?,?)
-            """,
-            (gid, title, "open", priority, ts, ts),
-        )
-    event("agenda.created", {"id": gid, "title": title})
-    return gid
+    digest = request_hash(title) if idempotency_key else None
+    db = connect()
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        if idempotency_key:
+            existing = db.execute(
+                "SELECT id, title, request_hash FROM agenda WHERE idempotency_key=?",
+                (idempotency_key,),
+            ).fetchone()
+            if existing is not None:
+                db.rollback()
+                return _goal_outcome(existing, title, digest)
+        try:
+            db.execute(
+                """
+                INSERT INTO agenda
+                (id,title,status,priority,created,updated,idempotency_key,request_hash)
+                VALUES (?,?,?,?,?,?,?,?)
+                """,
+                (gid, title, "open", priority, ts, ts, idempotency_key, digest),
+            )
+        except sqlite3.IntegrityError:
+            existing = None
+            if idempotency_key:
+                existing = db.execute(
+                    "SELECT id, title, request_hash FROM agenda WHERE idempotency_key=?",
+                    (idempotency_key,),
+                ).fetchone()
+            db.rollback()
+            if existing is None:
+                raise
+            return _goal_outcome(existing, title, digest)
+        db.commit()
+    finally:
+        db.close()
+    event(
+        "agenda.created",
+        {"id": gid, "title": title, "idempotency_key": idempotency_key},
+    )
+    return {"status": "created", "agenda_id": gid, "evidence_label": EVIDENCE_LABEL}
+
+
+def add_goal(
+    title: str,
+    priority: int = 10,
+    idempotency_key: str | None = None,
+) -> str:
+    outcome = record_goal(title, priority, idempotency_key)
+    if outcome["status"] == "conflict":
+        raise IdempotencyConflict(outcome)
+    return outcome["agenda_id"]
 
 
 def update_goal(agenda_id: str, status: str) -> None:
@@ -330,6 +568,9 @@ def status() -> dict[str, Any]:
         tasks_open = db.execute(
             "SELECT COUNT(*) FROM tasks WHERE status IN ('pending','running')"
         ).fetchone()[0]
+        unfinished_executions = db.execute(
+            "SELECT COUNT(*) FROM executions WHERE status='running'"
+        ).fetchone()[0]
     return {
         "identity": identity,
         "memory": memory_count,
@@ -337,6 +578,7 @@ def status() -> dict[str, Any]:
         "skills": skills,
         "events": events_n,
         "open_tasks": tasks_open,
+        "unfinished_executions": unfinished_executions,
         "db": str(DB),
         "event_chain": verify_event_chain(),
     }
@@ -1337,6 +1579,560 @@ def access_parity() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Fenced one-shot execution and independent verifier process
+# ---------------------------------------------------------------------------
+
+def artifact_root() -> Path:
+    override = os.environ.get("LEQUTIS_ARTIFACT_ROOT")
+    return Path(override).expanduser() if override else DB.parent / "artifacts"
+
+
+def _write_new_file(path: Path, data: bytes) -> None:
+    """Create ``path`` without following a symlink or truncating an existing file."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(path, flags, 0o644)
+    except FileExistsError as exc:
+        raise RuntimeError("artifact path already exists") from exc
+    except OSError as exc:
+        raise RuntimeError("artifact path is not a new file") from exc
+    try:
+        view = memoryview(data)
+        while view:
+            written = os.write(fd, view)
+            if written <= 0:
+                raise RuntimeError("artifact write failed")
+            view = view[written:]
+    finally:
+        os.close(fd)
+
+
+def canonical_json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def artifact_document(correlation_id: str, execution_id: str, content: str) -> bytes:
+    body = {
+        "content": content,
+        "correlation_id": correlation_id,
+        "evidence_label": EVIDENCE_LABEL,
+        "execution_id": execution_id,
+    }
+    return (canonical_json(body) + "\n").encode("utf-8")
+
+
+def proc_start_token(pid: int) -> str | None:
+    try:
+        text = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    cut = text.rfind(")")
+    fields = text[cut + 2:].split()
+    if len(fields) <= 19:
+        return None
+    return fields[19]
+
+
+def process_is_live(pid: int | None, expected_start: str | None) -> bool:
+    if not pid:
+        return False
+    try:
+        os.kill(int(pid), 0)
+    except OSError:
+        return False
+    start = proc_start_token(int(pid))
+    if expected_start and start and start != expected_start:
+        return False
+    return True
+
+
+def _semantic_for_execution(content: str, agenda_id: str) -> str:
+    """One semantic row per agenda item, reused when a later attempt retries."""
+    mid = str(uuid.uuid5(uuid.NAMESPACE_URL, "lequtis:run-once-semantic:" + agenda_id))
+    with connect() as db:
+        row = db.execute(
+            "SELECT kind, content FROM memory WHERE id=?",
+            (mid,),
+        ).fetchone()
+    if row is not None:
+        if row["kind"] != "semantic" or row["content"] != content:
+            raise RuntimeError("Action memory key conflicts with stored content")
+        event(
+            "memory.reused",
+            {"id": mid, "kind": "semantic", "agenda_id": agenda_id},
+        )
+        return mid
+    ts = now()
+    with connect() as db:
+        db.execute(
+            """
+            INSERT INTO memory(id,kind,content,created,updated)
+            VALUES (?,?,?,?,?)
+            """,
+            (mid, "semantic", content, ts, ts),
+        )
+    # The first insert is not tagged with agenda_id. The retry event is.
+    event("memory.created", {"id": mid, "kind": "semantic"})
+    return mid
+
+
+def _experience_for_execution(content: str, agenda_id: str) -> str:
+    mid = str(uuid.uuid4())
+    ts = now()
+    with connect() as db:
+        db.execute(
+            """
+            INSERT INTO memory(id,kind,content,created,updated)
+            VALUES (?,?,?,?,?)
+            """,
+            (mid, "experience", content, ts, ts),
+        )
+    event(
+        "memory.created",
+        {"id": mid, "kind": "experience", "agenda_id": agenda_id},
+    )
+    return mid
+
+
+def _claim_next() -> dict[str, Any] | None:
+    token = uuid.uuid4().hex
+    correlation_id = str(uuid.uuid4())
+    with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute(
+            """
+            SELECT id, title FROM agenda WHERE status='open'
+            ORDER BY priority DESC, created, id LIMIT 1
+            """
+        ).fetchone()
+        if row is None:
+            return None
+        agenda_id, title = row["id"], row["title"]
+        changed = db.execute(
+            "UPDATE agenda SET status='running', updated=? WHERE id=? AND status='open'",
+            (now(), agenda_id),
+        ).rowcount
+        if changed != 1:
+            return None
+        attempt = db.execute(
+            "SELECT COALESCE(MAX(attempt),0)+1 FROM executions WHERE agenda_id=?",
+            (agenda_id,),
+        ).fetchone()[0]
+        execution_id = str(uuid.uuid4())
+        action = "remember" if title.startswith("remember: ") else "unsupported"
+        action_input = title[len("remember: "):] if action == "remember" else title
+        relpath = correlation_id + ".json"
+        db.execute(
+            """
+            INSERT INTO executions
+            (id,agenda_id,attempt,status,action,input,started_at,claim_generation,lease_token,
+             worker_pid,lease_proc_start,correlation_id,artifact_relpath,claimed_verdict)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                execution_id, agenda_id, attempt, "running", action, action_input, now(),
+                attempt, token, os.getpid(), proc_start_token(os.getpid()), correlation_id,
+                relpath, "accepted",
+            ),
+        )
+    event("execution.notice", {
+        "execution_id": execution_id, "agenda_id": agenda_id, "attempt": attempt,
+    })
+    event("loop.notice", {
+        "execution_id": execution_id, "agenda_id": agenda_id, "stage": "NOTICE",
+        "evidence_label": EVIDENCE_LABEL,
+    })
+    event("execution.think", {"execution_id": execution_id, "available_actions": ["remember"]})
+    event("loop.think", {"execution_id": execution_id, "plan": "bounded remember action"})
+    event("execution.choose", {"execution_id": execution_id, "action": action})
+    event("loop.choose", {
+        "execution_id": execution_id, "action": action, "allowlisted": action == "remember",
+    })
+    return {
+        "id": execution_id,
+        "agenda_id": agenda_id,
+        "title": title,
+        "attempt": attempt,
+        "action": action,
+        "input": action_input,
+        "lease_token": token,
+        "correlation_id": correlation_id,
+        "artifact_relpath": relpath,
+    }
+
+
+def _finish_execution(
+    task: dict[str, Any],
+    status_value: str,
+    result: str | None = None,
+    error: BaseException | str | None = None,
+) -> bool:
+    ts = now()
+    with connect() as db:
+        updated = db.execute(
+            """
+            UPDATE executions SET status=?, result=?, error=?, completed_at=?
+            WHERE id=? AND status='running' AND lease_token=?
+            """,
+            (
+                status_value,
+                result,
+                None if error is None else str(error),
+                ts,
+                task["id"],
+                task["lease_token"],
+            ),
+        ).rowcount
+        if updated != 1:
+            return False
+        agenda_status = "complete" if status_value == "succeeded" else "blocked"
+        db.execute(
+            "UPDATE agenda SET status=?, updated=? WHERE id=? AND status='running'",
+            (agenda_status, ts, task["agenda_id"]),
+        )
+    event(
+        "execution.finished" if status_value == "succeeded" else "execution.failed",
+        {
+            "execution_id": task["id"],
+            "agenda_id": task["agenda_id"],
+            "status": status_value,
+            "result": result,
+            "error": None if error is None else str(error),
+        },
+    )
+    event("agenda.updated", {"agenda_id": task["agenda_id"], "status": agenda_status})
+    event("loop.update_agenda", {
+        "execution_id": task["id"],
+        "agenda_id": task["agenda_id"],
+        "status": agenda_status,
+        "stage": "UPDATE AGENDA",
+    })
+    return True
+
+
+def _pause_after_claim(task: dict[str, Any]) -> None:
+    pause = os.environ.get("LEQUTIS_PAUSE_AFTER_CLAIM")
+    if not pause:
+        return
+    folder = Path(pause)
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "claimed").write_text(
+        json.dumps({
+            "execution_id": task["id"],
+            "lease_token": task["lease_token"],
+            "pid": os.getpid(),
+            "artifact_relpath": task["artifact_relpath"],
+        }),
+        encoding="utf-8",
+    )
+    deadline = time.time() + 20
+    while time.time() < deadline and not (folder / "release").exists():
+        time.sleep(0.02)
+
+
+def _verify_independently(task: dict[str, Any], digest: str) -> dict[str, Any]:
+    challenge = uuid.uuid4().hex
+    with connect() as db:
+        db.execute(
+            """
+            UPDATE executions SET expected_sha256=?, verifier_challenge=?
+            WHERE id=? AND lease_token=?
+            """,
+            (digest, challenge, task["id"], task["lease_token"]),
+        )
+    proc = subprocess.Popen(
+        [
+            sys.executable, str(VERIFIER),
+            "--db", str(DB),
+            "--execution-id", task["id"],
+            "--artifact-root", str(artifact_root()),
+            "--challenge", challenge,
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    stdout, stderr = proc.communicate(timeout=30)
+    if proc.returncode != 0:
+        return {
+            "verdict": "rejected",
+            "reason": "verifier_process_failed",
+            "stderr": stderr,
+            "verifier_pid": proc.pid,
+        }
+    reported = json.loads(stdout)
+    if reported.get("verifier_pid") != proc.pid or reported.get("worker_self_report_consulted") is not False:
+        return {
+            "verdict": "rejected",
+            "reason": "verifier_identity_rejected",
+            "verifier_pid": proc.pid,
+        }
+    return reported
+
+
+def run_once() -> dict[str, Any]:
+    task = _claim_next()
+    if task is None:
+        return {"status": "idle", "evidence_label": EVIDENCE_LABEL}
+    _pause_after_claim(task)
+    try:
+        if task["action"] != "remember":
+            raise ValueError("No safe deterministic action supports this goal")
+        if not task["input"].strip():
+            raise ValueError("remember action requires non-empty text")
+        event("loop.act", {
+            "execution_id": task["id"], "action": "remember", "stage": "ACT",
+        })
+        memory_id = _semantic_for_execution(task["input"], task["agenda_id"])
+        with connect() as db:
+            observed = db.execute(
+                "SELECT content FROM memory WHERE id=?", (memory_id,)
+            ).fetchone()
+        if observed is None or observed[0] != task["input"]:
+            raise RuntimeError("Action result could not be observed")
+        document = artifact_document(task["correlation_id"], task["id"], observed[0])
+        digest = hashlib.sha256(document).hexdigest()
+        root = artifact_root()
+        root.mkdir(parents=True, exist_ok=True)
+        path = root / task["artifact_relpath"]
+        if not ARTIFACT_NAME.fullmatch(path.name):
+            raise RuntimeError("artifact path is not allowlisted")
+        payload = b"corrupt\n" if os.environ.get("LEQUTIS_CORRUPT_ARTIFACT") == "1" else document
+        _write_new_file(path, payload)
+        (root / "receipts").mkdir(exist_ok=True)
+        receipt = root / "receipts" / (task["correlation_id"] + "-stdout.txt")
+        _write_new_file(
+            receipt,
+            (
+                EVIDENCE_LABEL
+                + "\nartifact correlation_id="
+                + task["correlation_id"]
+                + " sha256="
+                + digest
+                + "\n"
+            ).encode("utf-8"),
+        )
+        verdict = _verify_independently(task, digest)
+        if verdict.get("verdict") != "accepted":
+            event("loop.observe", {
+                "execution_id": task["id"],
+                "verdict": verdict.get("verdict"),
+                "stage": "OBSERVE",
+            })
+            event("loop.evaluate", {
+                "execution_id": task["id"], "passed": False, "stage": "EVALUATE",
+            })
+            _finish_execution(task, "failed", error=verdict.get("reason"))
+            return {
+                "status": "failed",
+                "agenda_id": task["agenda_id"],
+                "error": verdict.get("reason"),
+                "verifier": verdict,
+                "evidence_label": EVIDENCE_LABEL,
+            }
+        event("execution.observe", {
+            "execution_id": task["id"], "memory_id": memory_id, "content": observed[0],
+        })
+        event("loop.observe", {
+            "execution_id": task["id"],
+            "memory_id": memory_id,
+            "content_sha256": verdict.get("content_sha256"),
+            "correlation_id": task["correlation_id"],
+            "worker_self_report_accepted": False,
+            "stage": "OBSERVE",
+        })
+        result = json.dumps({
+            "memory_id": memory_id,
+            "content": observed[0],
+            "correlation_id": task["correlation_id"],
+        })
+        event("execution.evaluate", {"execution_id": task["id"], "success": True})
+        event("loop.evaluate", {
+            "execution_id": task["id"], "passed": True, "stage": "EVALUATE",
+        })
+        experience = "Successful execution of agenda item: " + task["title"]
+        experience_id = _experience_for_execution(experience, task["agenda_id"])
+        event("execution.learn", {"execution_id": task["id"], "learned": True})
+        event("loop.learn", {
+            "execution_id": task["id"], "learned": True, "stage": "LEARN",
+        })
+        event("loop.remember", {
+            "execution_id": task["id"],
+            "memory_id": memory_id,
+            "experience_id": experience_id,
+            "stage": "REMEMBER",
+        })
+        if not _finish_execution(task, "succeeded", result=result):
+            raise RuntimeError("stale fence rejected completion")
+        return {
+            "status": "succeeded",
+            "agenda_id": task["agenda_id"],
+            "result": json.loads(result),
+            "verifier": verdict,
+            "evidence_label": EVIDENCE_LABEL,
+        }
+    except Exception as exc:
+        try:
+            event("execution.evaluate", {
+                "execution_id": task["id"], "success": False, "error": str(exc),
+            })
+            event("loop.evaluate", {
+                "execution_id": task["id"], "passed": False, "stage": "EVALUATE",
+            })
+        finally:
+            _finish_execution(task, "failed", error=exc)
+        return {
+            "status": "failed",
+            "agenda_id": task["agenda_id"],
+            "error": str(exc),
+            "evidence_label": EVIDENCE_LABEL,
+        }
+
+
+def recover_interrupted() -> dict[str, Any]:
+    with connect() as db:
+        rows = db.execute(
+            """
+            SELECT id, agenda_id, worker_pid, lease_proc_start
+            FROM executions WHERE status='running'
+            """
+        ).fetchall()
+    recovered: list[tuple[str, str]] = []
+    skipped: list[str] = []
+    for row in rows:
+        if process_is_live(row["worker_pid"], row["lease_proc_start"]):
+            skipped.append(row["id"])
+            continue
+        recovered.append((row["id"], row["agenda_id"]))
+    ts = now()
+    won: list[tuple[str, str]] = []
+    db = connect()
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        for execution_id, agenda_id in recovered:
+            changed = db.execute(
+                """
+                UPDATE executions
+                SET status='interrupted', error=?, completed_at=?, lease_token=NULL
+                WHERE id=? AND status='running'
+                """,
+                ("Process stopped before execution finished", ts, execution_id),
+            ).rowcount
+            if changed != 1:
+                continue
+            db.execute(
+                """
+                UPDATE agenda SET status='blocked', updated=?
+                WHERE id=? AND status='running'
+                """,
+                (ts, agenda_id),
+            )
+            won.append((execution_id, agenda_id))
+        db.commit()
+    finally:
+        db.close()
+    for execution_id, agenda_id in won:
+        event("execution.interrupted", {
+            "execution_id": execution_id, "agenda_id": agenda_id,
+        })
+        event("agenda.updated", {"agenda_id": agenda_id, "status": "blocked"})
+    return {
+        "recovered": len(won),
+        "live_skipped": skipped,
+        "evidence_label": EVIDENCE_LABEL,
+    }
+
+
+def retry_agenda(agenda_id: str) -> bool:
+    with connect() as db:
+        latest = db.execute(
+            """
+            SELECT status FROM executions
+            WHERE agenda_id=? ORDER BY attempt DESC LIMIT 1
+            """,
+            (agenda_id,),
+        ).fetchone()
+        if latest is None or latest[0] not in ("failed", "interrupted"):
+            return False
+        changed = db.execute(
+            """
+            UPDATE agenda SET status='open', updated=?
+            WHERE id=? AND status='blocked'
+            """,
+            (now(), agenda_id),
+        ).rowcount
+    if changed:
+        event("agenda.retry_requested", {"agenda_id": agenda_id})
+    return changed == 1
+
+
+def verify_events() -> dict[str, Any]:
+    previous = "GENESIS"
+    with connect() as db:
+        rows = db.execute(
+            """
+            SELECT ts, event_type, payload, previous_hash, event_hash
+            FROM events ORDER BY seq
+            """
+        ).fetchall()
+    for sequence, row in enumerate(rows, 1):
+        raw = previous + "|" + row[0] + "|" + row[1] + "|" + row[2]
+        expected = hashlib.sha256(raw.encode()).hexdigest()
+        if row[3] != previous or row[4] != expected:
+            return {
+                "valid": False,
+                "events": len(rows),
+                "invalid_sequence": sequence,
+                "evidence_label": EVIDENCE_LABEL,
+            }
+        previous = row[4]
+    return {"valid": True, "events": len(rows), "evidence_label": EVIDENCE_LABEL}
+
+
+def attempt_stale_complete(execution_id: str, token: str) -> dict[str, Any]:
+    with connect() as db:
+        row = db.execute(
+            "SELECT status, lease_token FROM executions WHERE id=?",
+            (execution_id,),
+        ).fetchone()
+        if row is None or row["lease_token"] != token or row["status"] != "running":
+            return {
+                "accepted": False,
+                "reason": "stale_fence",
+                "evidence_label": EVIDENCE_LABEL,
+            }
+        accepted = db.execute(
+            """
+            SELECT 1 FROM verifier_observations
+            WHERE execution_id=? AND verdict='accepted' AND worker_self_report_consulted=0
+            """,
+            (execution_id,),
+        ).fetchone()
+        if accepted is None:
+            return {
+                "accepted": False,
+                "reason": "verifier_required",
+                "evidence_label": EVIDENCE_LABEL,
+            }
+    return {
+        "accepted": False,
+        "reason": "completion_requires_current_lease",
+        "evidence_label": EVIDENCE_LABEL,
+    }
+
+
+def _parse_goal(argv: list[str]) -> tuple[str | None, str]:
+    args = argv[2:]
+    if args[:1] == ["--key"]:
+        if len(args) < 3:
+            raise SystemExit("goal --key requires a key and a title")
+        return args[1], " ".join(args[2:]).strip()
+    return None, " ".join(args).strip()
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -1347,7 +2143,8 @@ def main() -> None:
     if len(argv) < 2:
         print(
             "LeQutis commands: init | status | heartbeat | remember | goal | "
-            "loop | verify | verify-independent | unfinished | sources | "
+            "loop | run-once | recover | retry | verify | verify-events | "
+            "verify-independent | unfinished | complete | daemon | sources | "
             "assimilate | ingest | search | gates | seed-gates | skills | "
             "parity"
         )
@@ -1372,18 +2169,62 @@ def main() -> None:
         print("MEMORY STORED")
 
     elif cmd == "goal":
-        title = " ".join(argv[2:]).strip()
+        key, title = _parse_goal(argv)
         if not title:
             raise SystemExit("goal requires title")
-        add_goal(title)
-        print("AGENDA ITEM CREATED")
+        outcome = record_goal(title, idempotency_key=key)
+        if outcome["status"] == "conflict":
+            print(json.dumps(outcome, sort_keys=True))
+            raise SystemExit(1)
+        print(
+            "AGENDA ITEM EXISTS"
+            if outcome["status"] == "duplicate"
+            else "AGENDA ITEM CREATED"
+        )
 
     elif cmd == "loop":
         result = run_loop()
         print(json.dumps(result, indent=2))
 
+    elif cmd == "run-once":
+        result = run_once()
+        print(json.dumps(result, indent=2))
+        if result["status"] == "failed":
+            raise SystemExit(1)
+
+    elif cmd == "recover":
+        print(json.dumps(recover_interrupted()))
+
+    elif cmd == "retry":
+        if len(argv) != 3:
+            raise SystemExit("retry requires an agenda id")
+        if not retry_agenda(argv[2]):
+            raise SystemExit("agenda item is not recoverable")
+        print("AGENDA ITEM REOPENED")
+
     elif cmd == "verify":
         print(json.dumps(verify_event_chain(), indent=2))
+
+    elif cmd == "verify-events":
+        result = verify_events()
+        print(json.dumps(result, indent=2))
+        if not result["valid"]:
+            raise SystemExit(1)
+
+    elif cmd == "complete":
+        if len(argv) != 4:
+            raise SystemExit("complete requires an execution id and a lease token")
+        print(json.dumps(attempt_stale_complete(argv[2], argv[3]), sort_keys=True))
+        raise SystemExit(1)
+
+    elif cmd == "daemon":
+        interval = int(argv[2]) if len(argv) > 2 else 60
+        if interval < 1:
+            raise SystemExit("daemon interval must be at least one second")
+        while True:
+            result = run_once()
+            print(json.dumps(result), flush=True)
+            time.sleep(interval)
 
     elif cmd == "verify-independent":
         cid = argv[2] if len(argv) > 2 else None

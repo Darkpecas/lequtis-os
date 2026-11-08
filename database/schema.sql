@@ -22,8 +22,13 @@ CREATE TABLE IF NOT EXISTS agenda (
     status TEXT NOT NULL,
     priority INTEGER NOT NULL DEFAULT 0,
     created TEXT NOT NULL,
-    updated TEXT NOT NULL
+    updated TEXT NOT NULL,
+    idempotency_key TEXT,
+    request_hash TEXT
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agenda_idempotency
+    ON agenda(idempotency_key) WHERE idempotency_key IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS skills (
     id TEXT PRIMARY KEY,
@@ -94,4 +99,40 @@ CREATE TABLE IF NOT EXISTS knowledge_items (
     updated TEXT NOT NULL,
     UNIQUE(source_id, path),
     FOREIGN KEY(source_id) REFERENCES knowledge_sources(id)
+);
+
+CREATE TABLE IF NOT EXISTS executions (
+    id TEXT PRIMARY KEY,
+    agenda_id TEXT NOT NULL REFERENCES agenda(id),
+    attempt INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    action TEXT NOT NULL,
+    input TEXT NOT NULL,
+    result TEXT,
+    error TEXT,
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    claim_generation INTEGER NOT NULL DEFAULT 0,
+    lease_token TEXT,
+    worker_pid INTEGER,
+    lease_proc_start TEXT,
+    correlation_id TEXT,
+    artifact_relpath TEXT,
+    expected_sha256 TEXT,
+    verifier_challenge TEXT,
+    claimed_verdict TEXT,
+    UNIQUE(agenda_id, attempt)
+);
+
+CREATE TABLE IF NOT EXISTS verifier_observations (
+    id TEXT PRIMARY KEY,
+    execution_id TEXT NOT NULL,
+    correlation_id TEXT,
+    artifact_path TEXT,
+    content_sha256 TEXT,
+    verdict TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    verifier_pid INTEGER NOT NULL,
+    worker_self_report_consulted INTEGER NOT NULL DEFAULT 0,
+    created TEXT NOT NULL
 );

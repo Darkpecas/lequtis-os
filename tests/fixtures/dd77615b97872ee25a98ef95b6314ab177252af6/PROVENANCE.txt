@@ -1,0 +1,18 @@
+Vendored kernel used by tests/test_schema_guard.py.
+
+source_commit: dd77615b97872ee25a98ef95b6314ab177252af6
+source_subject: Add disposable autonomous execution coverage
+source_author: copilot-swe-agent[bot] <198982749+Copilot@users.noreply.github.com>
+source_date: Wed Oct 14 10:49:11 2026 +0000
+source_path: core/lequtis.py
+source_mode: 100755
+git_blob: 1f3f3e5e77f879d87b716d4092417ec6b185f7d2
+sha256: 0229fe6348d3f10535f70c9f60e2ef983e789cd22baa5acd16d2c294a2ea41cc
+present_on: origin/copilot/start-new-one-on-my-page, origin/copilot/locate-lequtis-folder
+
+core/lequtis.py in this directory is a byte-for-byte copy of core/lequtis.py at
+that commit (git blob 1f3f3e5e77f879d87b716d4092417ec6b185f7d2, SHA-256
+0229fe6348d3f10535f70c9f60e2ef983e789cd22baa5acd16d2c294a2ea41cc). The
+schema-guard test runs this file to create a database, then checks that the
+lequtis-os-kernel-3 kernel refuses that database and leaves it unchanged.
+The test does not invoke git.

@@ -92,6 +92,19 @@ LEQUTIS_WORKER=openai LEQUTIS_WORKER_URL=https://api.openai.com/v1/chat/completi
 
 Unsafe proposals are rejected and fall back to deterministic policy.
 
+## Kernel hardening (lequtis-os-kernel-3)
+
+LOCAL PROOF, NOT LIVE VPS VERIFIED.
+
+These controls sit on the current kernel. Existing commands, `LEQUTIS_STATE`, and `LEQUTIS_ROOT` still work. `LEQUTIS_DB` selects the database file when it is set; otherwise the file remains `$LEQUTIS_STATE/lequtis.db`.
+
+- An existing database whose columns or `identity.schema_revision` are not `lequtis-os-kernel-3` fails closed. `status` and `init` exit 3 with `schema guard` and do not write.
+- `goal --key <key> <title>` replays the same title as one agenda row. The same key with a different title is a conflict.
+- `run-once` writes one allowlisted artifact and asks `core/verifier_main.py`, a separate process, to check its path, hash, and correlation id. The verifier does not read the worker self-report. A rejected verdict leaves the agenda incomplete.
+- `recover` does not take a lease whose process is still alive. After that process is killed, `complete` with the old lease token cannot finish the agenda.
+
+`run.sh` calls `python core/lequtis.py daemon 900`. `daemon` repeats `run-once`.
+
 ## Safe actions
 
 Registered actions only: `inspect_status`, `store_note`, `ping`, `deliberate_fail`.

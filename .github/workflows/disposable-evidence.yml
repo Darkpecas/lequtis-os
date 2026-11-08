@@ -32,6 +32,8 @@ jobs:
         run: python3 tests/test_hermes_route.py
       - name: Host read-only receipt fails closed
         run: python3 tests/test_host_receipt.py
+      - name: Kernel hardening proof
+        run: python3 -W error::ResourceWarning -m unittest discover -s tests -p 'test_*.py' -v
       - name: Explicit evidence boundary
         run: |
           echo "CI tests disposable/local behavior only."
