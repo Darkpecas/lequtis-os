@@ -60,6 +60,10 @@ def canonical_commit(record):
         if mode not in ("intent", "receipt"):
             raise ValueError("mode must be intent or receipt")
         key = _text(record.get("idempotency_key"), "idempotency_key", 200)
+        # Fail closed on a redirected state database; never follow a symlink
+        # supplied through LEQUTIS_STATE to an unintended database.
+        if L.DB.is_symlink():
+            raise RuntimeError("canonical_database_symlink_rejected")
         if not L.DB.is_file():
             raise RuntimeError("canonical_database_missing")
         if mode == "intent":

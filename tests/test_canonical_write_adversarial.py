@@ -79,6 +79,24 @@ class CanonicalWriteAdversarial(unittest.TestCase):
         finally:
             os.environ["LEQUTIS_TRUSTED_LOCAL_TRANSPORT"] = "1"
 
+    def test_026_symlinked_canonical_database_rejected(self):
+        # A path supplied through LEQUTIS_STATE must not redirect writes
+        # into a different database, even when the linked file exists.
+        target = self.L.DB
+        old_db = self.L.DB
+        before = self.counts()
+        with tempfile.TemporaryDirectory(prefix="lequtis-symlink-") as scratch:
+            redirected = Path(scratch) / "lequtis.db"
+            redirected.symlink_to(target)
+            self.L.DB = redirected
+            try:
+                result = self.W.canonical_commit(self.intent("symlink-adversarial"))
+                self.assertFalse(result["ok"], result)
+                self.assertEqual(result["reason"], "canonical_database_symlink_rejected")
+            finally:
+                self.L.DB = old_db
+        self.assertEqual(self.counts(), before)
+
     def test_03_concurrent_replay_one_event(self):
         packet = self.intent("concurrency-adversarial")
         with ThreadPoolExecutor(max_workers=6) as pool:
