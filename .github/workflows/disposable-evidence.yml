@@ -30,6 +30,8 @@ jobs:
         run: python3 tests/test_canonical_write.py
       - name: Canonical write adversarial tests (disposable only)
         run: python3 tests/test_canonical_write_adversarial.py
+      - name: Governed attestation, learning and agenda (disposable only)
+        run: python3 tests/test_verified_completion.py
       - name: Preflight contract
         run: python3 tests/test_host_preflight.py
       - name: Hermes route cannot fake live proof
