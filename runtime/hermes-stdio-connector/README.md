@@ -14,6 +14,29 @@ LIVE LOOP ledger contract. **Not deployed. Not a Hostinger live proof.**
 
 `hermes_query` never writes LeQutis intent, events, evaluation, memory, or agenda.
 
+## MCP protocol compatibility (2026-11-08 audit)
+
+This reconstructed stdio adapter implements the **legacy 2024-11-05** MCP
+initialize handshake only. It MUST NOT claim July 2026 compatibility just
+because a client requests version `2026-07-28`. During legacy
+`initialize`, it responds with its actually supported version
+(`2024-11-05`) so clients can disconnect or negotiate appropriately.
+
+The new July 2026 **modern** protocol instead uses per-request `_meta`
+and `server/discover` with no initialization handshake. This adapter
+does **not** implement that modern contract; `server/discover` returns
+method not found rather than a fabricated success. No modern MCP Tasks,
+MCP Apps, HTTP listener, or live tunnel is claimed.
+
+Before any modern implementation, inspect the real Hostinger/Hermes
+client capabilities, preserve legacy compatibility, test transport framing
+and authorization on disposable state, and then independently verify a
+live read-only round trip. No deployment is implied by this documentation.
+
+Official references:
+- https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning
+- https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle
+
 ## Preflight exit codes
 
 | Code | Meaning |
