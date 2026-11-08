@@ -1,51 +1,98 @@
 # LeQutisOS
 
-LeQutisOS local foundation.
+Canonical GitHub home: **https://github.com/Darkpecas/lequtis-os**
+
+LeQutis is a proactive, autonomous, self-improving AI partner.
+
+LeQutis owns identity, memory, agenda, skills, evidence and evolutionary history.
+Models and tools are replaceable workers — never senior to LeQutis.
+
+## Where the body of work lives
+
+External stores are evidence feeds, not senior authority:
+
+| Store | Role |
+| --- | --- |
+| **GitHub `Darkpecas/lequtis-os`** | Canonical runtime / kernel home |
+| Google Docs / Google Drive | Main durable prose + attachments |
+| iCloud | Mobile chats / backups / Files |
+| ChatGPT / Gemini | Conversation corpora (workers) |
+| NotebookLM | Grounded research notebooks |
+| Obsidian + personal graph SOPs | SOPs and personal knowledge graph |
+
+```sh
+python3 core/lequtis.py sources list
+python3 core/lequtis.py assimilate          # docs/evidence
+python3 core/lequtis.py ingest              # knowledge/inbox/<source_id>/
+python3 core/lequtis.py gates               # LIVE LOOP gate ledger
+python3 core/lequtis.py seed-gates          # open/partial gates → agenda
+```
+
+Google Drive is often connected in Desktop Cursor but **not** in a given cloud
+agent run. If Drive MCP shows `needsAuth`, drop Doc exports into
+`knowledge/inbox/google_docs/` instead of re-prompting auth.
 
 ## Architecture
 
-- `core/` — core runtime
+- `core/` — living kernel + autonomous loop
+- `knowledge/` — source registry (`SOURCES.yaml` / `SOURCES.json`)
 - `database/` — persistent state schema
-- `bridges/` — external integrations
-- `telemetry/` — telemetry
-- `tasks/` — task execution state
-- `logs/` — runtime logs
+- `tests/` — disposable integration evidence
+- `docs/evidence/` — assimilated export pack
+- `state/` — runtime SQLite WAL DB (gitignored)
+- `logs/` — runtime logs (gitignored)
 
-Runtime databases and logs are intentionally excluded from Git.
+## Autonomous loop
 
-## Verification target
-
-The autonomous execution path must eventually prove:
-
-goal -> task -> execution -> state -> result -> audit
-
-The kernel includes a constrained execution loop for `remember: ...` agenda
-items. It records execution phases in the hash-chained event log, stores the
-result and learned experience, and completes the agenda item. Other goal types
-are blocked with an explicit failure; no shell or arbitrary system actions are
-available.
-
-## Execution
-
-Run one deterministic action with:
-
-```sh
-python core/lequtis.py goal "remember: a fact to retain"
-python core/lequtis.py run-once
-python core/lequtis.py verify-events
+```
+NOTICE → THINK → CHOOSE → ACT → OBSERVE → EVALUATE → LEARN → REMEMBER → UPDATE AGENDA
 ```
 
-`python core/lequtis.py daemon 900` checks for work every 900 seconds. After an
-unexpected process stop, `recover` marks unfinished executions as interrupted
-and blocks them. Inspect the agenda with `agenda`, then explicitly resume an
-item using `retry <agenda-id>`.
+Every phase emits a hash-chained audit event.
 
-The integration suite uses a temporary SQLite database and can be run with:
+## Quick start
 
 ```sh
-python -m unittest discover -s tests -p 'test_*.py'
+python3 core/lequtis.py init
+python3 core/lequtis.py goal "Inspect kernel status via autonomous loop"
+python3 core/lequtis.py loop
+python3 core/lequtis.py verify
+python3 core/lequtis.py verify-independent
+python3 core/lequtis.py parity
+python3 core/lequtis.py skills propose "example-skill"
+python3 core/lequtis.py search "LeQutis"
+python3 tests/autonomous_loop_test.py
+python3 tests/test_skills_verifier_parity.py
+./doctor.sh
 ```
 
-This is an initial, safe execution slice—not a general autonomous agent. Model
-providers, research, arbitrary tools, and broader evaluation capabilities are
-not implemented.
+Host vs phone roles: see repo-root `COMPUTER_REQUIREMENTS.md`.
+
+Disposable tests never touch production state. Set `LEQUTIS_STATE` to point at a temp directory.
+
+## Cognitive workers (THINK / CHOOSE)
+
+Replaceable workers rank and propose; **ACT stays the safe registry**.
+
+```sh
+# default
+LEQUTIS_WORKER=deterministic python3 core/lequtis.py loop
+
+# external JSON script worker
+LEQUTIS_WORKER=script LEQUTIS_WORKER_SCRIPT=/path/to/worker.py python3 core/lequtis.py loop
+
+# OpenAI-compatible HTTP worker (optional)
+LEQUTIS_WORKER=openai LEQUTIS_WORKER_URL=https://api.openai.com/v1/chat/completions \
+  LEQUTIS_WORKER_MODEL=gpt-4o-mini LEQUTIS_WORKER_API_KEY=... python3 core/lequtis.py loop
+```
+
+Unsafe proposals are rejected and fall back to deterministic policy.
+
+## Safe actions
+
+Registered actions only: `inspect_status`, `store_note`, `ping`, `deliberate_fail`.
+No arbitrary destructive system execution.
+
+## Brahma Evo
+
+Brahma Evo is a research candidate only. Its licence forbids importing its source into LeQutis. Patterns may be independently reimplemented under LeQutis governance — never as a rival sovereign brain.
