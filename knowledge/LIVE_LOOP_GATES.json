@@ -18,13 +18,13 @@
       "id": "G02_chatgpt_hermes_route",
       "title": "Establish authorized ChatGPT → bridge → Hostinger/Hermes route",
       "status": "PARTIAL",
-      "note": "Disposable route contract + authorize/probe API in runtime/chatgpt_hermes_route. Live tunnel credentials not supplied this session."
+      "note": "Local route contract verified. This module has no tunnel transport; environment flags cannot establish the route. G02 stays PARTIAL until an actual authorized tunneled probe succeeds with an auditable remote receipt."
     },
     {
       "id": "G03_hermes_probe_receipt",
       "title": "Read-only live Hermes CLI probe with actual receipt",
       "status": "PARTIAL",
-      "note": "Disposable fake probe receipts verified (schema + hash + redaction). Live Hostinger receipt still OPEN until operator sets LEQUTIS_HERMES_ROUTE=live + tunnel env."
+      "note": "Local disposable receipt verified. Local hermes --version is explicitly local-only and never sets live_host. G03 stays PARTIAL until a read-only probe reaches Hostinger through the tunnel and returns an auditable remote receipt."
     },
     {
       "id": "G04_canonical_state_read",
