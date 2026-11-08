@@ -28,6 +28,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from canonical_write import canonical_commit
+
+
 ROOT = Path(os.environ.get("LEQUTIS_ROOT", Path(__file__).resolve().parents[2]))
 CORE = ROOT / "core"
 if str(CORE) not in sys.path:
@@ -178,8 +181,37 @@ if HERMES_QUERY_ENABLED:
     )
 
 
+if os.environ.get("LEQUTIS_CANONICAL_WRITE") == "1":
+    TOOLS.append(
+        {
+            "name": "lequtis_canonical_commit",
+            "description": (
+                "Host-opt-in atomic canonical intent/receipt write. "
+                "Receipts and memory remain UNVERIFIED until audited."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "mode": {"type": "string", "enum": ["intent", "receipt"]},
+                    "idempotency_key": {"type": "string"},
+                    "title": {"type": "string"},
+                    "action": {"type": "string"},
+                    "payload": {"type": "object"},
+                    "agenda_id": {"type": "string"},
+                    "receipt": {"type": "object"},
+                    "memory": {"type": "string"},
+                },
+                "required": ["mode", "idempotency_key"],
+                "additionalProperties": False,
+            },
+        }
+    )
+
+
 def call_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, Any]:
     args = arguments or {}
+    if name == "lequtis_canonical_commit":
+        return canonical_commit(args)
     if name == "lequtis_status":
         return tool_lequtis_status()
     if name == "lequtis_verify_events":
@@ -231,7 +263,7 @@ def handle(msg: dict[str, Any]) -> dict[str, Any] | None:
                     "version": "1.2.22-reconstructed",
                 },
                 "instructions": (
-                    "Integration candidate. Read-only by default. "
+                    "Integration candidate. Read-only by default; canonical writes require LEQUTIS_CANONICAL_WRITE=1. "
                     "Not a Hostinger live proof. hermes_query requires LEQUTIS_HERMES_QUERY=1."
                 ),
             },
