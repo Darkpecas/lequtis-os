@@ -46,6 +46,8 @@ def canonical_commit(record):
     """
     if os.environ.get("LEQUTIS_CANONICAL_WRITE") != "1":
         return {"ok": False, "reason": "canonical_write_disabled"}
+    if not os.environ.get("LEQUTIS_STATE"):
+        return {"ok": False, "reason": "explicit_state_required"}
     if not isinstance(record, dict):
         return {"ok": False, "reason": "invalid_record"}
     try:
