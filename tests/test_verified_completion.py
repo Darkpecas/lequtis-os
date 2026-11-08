@@ -5,6 +5,7 @@ import hmac
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -141,7 +142,49 @@ class TestVerifiedCompletion(unittest.TestCase):
                              "done")
         self.assertTrue(self.L.verify_event_chain()["ok"])
 
-    def test_08_tamper_rejected_without_mutation(self):
+    def test_08_failure_keeps_agenda_open(self):
+        with self.L.connect() as db:
+            db.execute("INSERT INTO agenda(id,title,status,priority,created,updated) VALUES(?,?,?,?,?,?)",
+                       ("fixture-agenda-failure", "fixture", "open", 1, self.L.now(), self.L.now()))
+        p = self.records("verifier-failure", agenda_id="fixture-agenda-failure")
+        p["verdict"] = "failure"
+        r = self.V.complete_with_verifier_attestation(self.envelope(p), key=KEY)
+        self.assertTrue(r["ok"], r)
+        with self.L.connect() as db:
+            self.assertEqual(db.execute("SELECT status FROM tasks WHERE id=?", (p["task_id"],)).fetchone()[0], "failed")
+            self.assertEqual(db.execute("SELECT status FROM agenda WHERE id='fixture-agenda-failure'").fetchone()[0], "open")
+
+    def test_09_agenda_conflict_rolls_back_everything(self):
+        with self.L.connect() as db:
+            db.execute("INSERT INTO agenda(id,title,status,priority,created,updated) VALUES(?,?,?,?,?,?)",
+                       ("fixture-agenda-closed", "fixture", "done", 1, self.L.now(), self.L.now()))
+        p = self.records("verifier-rollback", agenda_id="fixture-agenda-closed")
+        with self.L.connect() as db:
+            before = tuple(db.execute("SELECT COUNT(*) FROM " + t).fetchone()[0] for t in ("events", "memory"))
+        r = self.V.complete_with_verifier_attestation(self.envelope(p), key=KEY)
+        self.assertEqual(r["reason"], "agenda_not_open", r)
+        with self.L.connect() as db:
+            self.assertEqual(db.execute("SELECT status FROM tasks WHERE id=?", (p["task_id"],)).fetchone()[0], "pending")
+            self.assertEqual(tuple(db.execute("SELECT COUNT(*) FROM " + t).fetchone()[0]
+                                   for t in ("events", "memory")), before)
+
+    def test_10_fresh_process_reads_same_canonical_state(self):
+        p = self.records("verifier-fresh")
+        r = self.V.complete_with_verifier_attestation(self.envelope(p), key=KEY)
+        self.assertTrue(r["ok"], r)
+        script = """
+import json, lequtis as L
+with L.connect() as db:
+    task = db.execute("SELECT status FROM tasks WHERE id=?", ("TASK_ID",)).fetchone()
+    memory = db.execute("SELECT kind FROM memory WHERE id=?", ("MEMORY_ID",)).fetchone()
+print(json.dumps({"status": task[0], "memory": memory[0], "chain": L.verify_event_chain()["ok"]}))
+""".replace("TASK_ID", p["task_id"]).replace("MEMORY_ID", r["memory_id"])
+        result = subprocess.run([sys.executable, "-c", script], cwd=ROOT / "core",
+                                env=os.environ.copy(), capture_output=True, text=True, check=True)
+        data = json.loads(result.stdout)
+        self.assertEqual(data, {"status": "completed", "memory": "learning.attested_not_live", "chain": True})
+
+    def test_99_tamper_rejected_without_mutation(self):
         p = self.records("verifier-tamper")
         with self.L.connect() as db:
             db.execute("UPDATE events SET payload='tampered' WHERE seq=1")
