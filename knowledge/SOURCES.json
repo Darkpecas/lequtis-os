@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "owner": "LeQutis",
+  "recorded": "2026-11-08",
+  "canonical_github": "https://github.com/Darkpecas/lequtis-os",
+  "rule": "The canonical governed state is maintained by LeQutis. External repositories and evidence feeds are subordinate sources, not authorities.",
+  "sources": [
+    {
+      "id": "github_lequtis_os",
+      "kind": "evidence_source",
+      "role": "declared_source",
+      "location": "operator-configured source",
+      "status": "declared"
+    },
+    {
+      "id": "google_docs",
+      "kind": "evidence_source",
+      "role": "declared_source",
+      "location": "operator-configured source",
+      "status": "declared"
+    },
+    {
+      "id": "google_drive",
+      "kind": "evidence_source",
+      "role": "declared_source",
+      "location": "operator-configured source",
+      "status": "declared"
+    },
+    {
+      "id": "icloud",
+      "kind": "evidence_source",
+      "role": "declared_source",
+      "location": "operator-configured source",
+      "status": "declared"
+    },
+    {
+      "id": "chatgpt",
+      "kind": "evidence_source",
+      "role": "declared_source",
+      "location": "operator-configured source",
+      "status": "declared"
+    },
+    {
+      "id": "gemini",
+      "kind": "evidence_source",
+      "role": "declared_source",
+      "location": "operator-configured source",
+      "status": "declared"
+    },
+    {
+      "id": "notebook_lm",
+      "kind": "evidence_source",
+      "role": "declared_source",
+      "location": "operator-configured source",
+      "status": "declared"
+    },
+    {
+      "id": "obsidian",
+      "kind": "evidence_source",
+      "role": "declared_source",
+      "location": "operator-configured source",
+      "status": "declared"
+    },
+    {
+      "id": "personal_graph_sops",
+      "kind": "evidence_source",
+      "role": "declared_source",
+      "location": "operator-configured source",
+      "status": "declared"
+    }
+  ],
+  "local_evidence_feed": []
+}
