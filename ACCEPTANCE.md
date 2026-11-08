@@ -56,7 +56,10 @@ python3 core/lequtis.py parity
 python3 core/lequtis.py verify-independent <correlation_id>
 ```
 
-- Skills lifecycle API (`PROPOSED→SANDBOXED→ENABLED→RETIRED`).
+- Skills lifecycle API (`PROPOSED→SANDBOXED→ENABLED→RETIRED`) rejects
+  promotion without structured, candidate-bound test and admission receipts.
+- Receipt validation checks recorded status, candidate/version, artifact hash,
+  and test-receipt linkage; it does not execute code or authenticate issuers.
 - Independent verifier rejects self-report alone (G07 → `VERIFIED_DISPOSABLE`).
 - ACCESS/SOURCES/gates ID parity checker (G11 → `VERIFIED_DISPOSABLE`).
 - Knowledge `search` CLI + schema.sql drift guard.

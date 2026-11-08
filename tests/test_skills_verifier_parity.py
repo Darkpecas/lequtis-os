@@ -3,9 +3,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -32,12 +35,88 @@ def load_L(state: Path):
 
 
 def test_skills_lifecycle(state: Path) -> None:
-    print("TEST SKILLS: propose → sandbox → enable → retire")
+    print("TEST SKILLS: evidence-gated sandbox → admission → retire")
     L = load_L(state)
-    sid = L.skill_propose("ping-helper", version="0.1.0", evidence={"via": "test"})
+    sid = L.skill_propose(
+        "ping-helper", version="0.1.0", evidence={"via": "test"}
+    )
     assert L.skill_list("PROPOSED")
-    L.skill_advance(sid, "SANDBOXED")
-    L.skill_advance(sid, "ENABLED")
+
+    def must_reject(call, label: str) -> None:
+        try:
+            call()
+            raise AssertionError(f"{label} must be rejected")
+        except ValueError:
+            pass
+
+    def status() -> str:
+        return L.skill_list()[0]["status"]
+
+    must_reject(lambda: L.skill_advance(sid, "SANDBOXED"), "missing test receipt")
+    assert status() == "PROPOSED"
+
+    test_receipt = {
+        "status": "PASS",
+        "skill_id": sid,
+        "skill_version": "0.1.0",
+        "test_run_id": "disposable-test-001",
+        "isolated": True,
+        "artifact_sha256": "a" * 64,
+    }
+    failed_receipt = {**test_receipt, "status": "FAIL"}
+    must_reject(
+        lambda: L.skill_advance(sid, "SANDBOXED", {"test_receipt": failed_receipt}),
+        "failed test",
+    )
+    wrong_candidate = {**test_receipt, "skill_version": "9.9.9"}
+    must_reject(
+        lambda: L.skill_advance(sid, "SANDBOXED", {"test_receipt": wrong_candidate}),
+        "wrong candidate version",
+    )
+    assert status() == "PROPOSED"
+
+    L.skill_advance(sid, "SANDBOXED", {"test_receipt": test_receipt})
+    assert status() == "SANDBOXED"
+    must_reject(lambda: L.skill_advance(sid, "ENABLED"), "missing admission receipt")
+
+    receipt_hash = hashlib.sha256(
+        json.dumps(test_receipt, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    admission_receipt = {
+        "decision": "APPROVED",
+        "skill_id": sid,
+        "skill_version": "0.1.0",
+        "review_id": "review-001",
+        "reviewer_id": "lequtis-verifier-01",
+        "test_receipt_sha256": receipt_hash,
+    }
+    bad_admission = {**admission_receipt, "test_receipt_sha256": "0" * 64}
+    must_reject(
+        lambda: L.skill_advance(sid, "ENABLED", {"admission_receipt": bad_admission}),
+        "unbound admission receipt",
+    )
+    replaced_test = {**test_receipt, "test_run_id": "different-run"}
+    must_reject(
+        lambda: L.skill_advance(
+            sid,
+            "ENABLED",
+            {"test_receipt": replaced_test, "admission_receipt": admission_receipt},
+        ),
+        "replacement test receipt",
+    )
+    assert status() == "SANDBOXED"
+
+    L.skill_advance(sid, "ENABLED", {"admission_receipt": admission_receipt})
+    assert status() == "ENABLED"
+    must_reject(
+        lambda: L.skill_advance(
+            sid,
+            "RETIRED",
+            {"test_receipt": {**test_receipt, "test_run_id": "tampered"}},
+        ),
+        "receipt tampering during retirement",
+    )
+    assert status() == "ENABLED"
     L.skill_advance(sid, "RETIRED")
     try:
         L.skill_advance(sid, "ENABLED")
@@ -68,6 +147,41 @@ def test_independent_verifier(state: Path) -> None:
         db.execute("DELETE FROM tasks WHERE id=?", (tid,))
     bad = L.verify_independent("verify-ind-1")
     assert bad["ok"] is False, bad
+    print("  PASS")
+
+
+def test_skill_cli_receipt(state: Path) -> None:
+    print("TEST SKILLS CLI: accepts structured promotion evidence")
+    L = load_L(state)
+    sid = L.skill_propose("cli-helper", version="0.1.0")
+    receipt = {
+        "status": "PASS",
+        "skill_id": sid,
+        "skill_version": "0.1.0",
+        "test_run_id": "cli-test-001",
+        "isolated": True,
+        "artifact_sha256": "b" * 64,
+    }
+    env = os.environ.copy()
+    env["LEQUTIS_ROOT"] = str(ROOT)
+    env["LEQUTIS_STATE"] = str(state)
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "core" / "lequtis.py"),
+            "skills",
+            "advance",
+            sid,
+            "SANDBOXED",
+            json.dumps({"test_receipt": receipt}),
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert L.skill_list()[0]["status"] == "SANDBOXED"
     print("  PASS")
 
 
@@ -144,11 +258,12 @@ def main() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="lequtis-svp-"))
     try:
         test_skills_lifecycle(tmp / "skills")
+        test_skill_cli_receipt(tmp / "skill-cli")
         test_independent_verifier(tmp / "verifier")
         test_access_parity(tmp / "parity")
         test_knowledge_search(tmp / "search")
         test_schema_drift(tmp / "schema")
-        print("ALL PASS: skills + verifier + parity + search + schema")
+        print("ALL PASS: skill receipts + verifier + parity + search + schema")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

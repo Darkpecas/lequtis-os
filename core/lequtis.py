@@ -1421,8 +1421,17 @@ def main() -> None:
             print(json.dumps({"id": sid, "status": "PROPOSED"}, indent=2))
         elif sub == "advance":
             if len(argv) < 5:
-                raise SystemExit("skills advance <id> <STATUS>")
-            print(json.dumps(skill_advance(argv[3], argv[4]), indent=2))
+                raise SystemExit(
+                    "skills advance <id> <STATUS> [evidence-json-object]"
+                )
+            evidence = json.loads(" ".join(argv[5:])) if len(argv) > 5 else None
+            if evidence is not None and not isinstance(evidence, dict):
+                raise SystemExit("evidence-json-object must decode to an object")
+            print(
+                json.dumps(
+                    skill_advance(argv[3], argv[4], evidence), indent=2
+                )
+            )
         else:
             raise SystemExit("skills subcommands: list | propose | advance")
 

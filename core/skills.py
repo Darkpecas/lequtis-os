@@ -6,11 +6,18 @@ States (forward-only except retire from any non-retired):
   PROPOSED -> SANDBOXED -> ENABLED -> RETIRED
 
 Workers may propose skill text; only this module mutates the skills table.
+
+Promotion requires structured test and admission receipts bound to the skill
+ID, version, and tested artifact. Receipts are caller-supplied records: this
+module validates their shape and linkage but does not itself execute skill
+code or authenticate the receipt issuer.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import uuid
 from typing import Any, Callable
 
@@ -21,6 +28,69 @@ TRANSITIONS = {
     "ENABLED": frozenset({"RETIRED"}),
     "RETIRED": frozenset(),
 }
+
+
+def _decode_evidence(raw: str | None) -> dict[str, Any]:
+    try:
+        evidence = json.loads(raw or "{}")
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("stored skill evidence is invalid") from exc
+    if not isinstance(evidence, dict):
+        raise ValueError("stored skill evidence must be an object")
+    return evidence
+
+
+def _validate_test_receipt(
+    receipt: Any, *, skill_id: str, version: str
+) -> dict[str, Any]:
+    if not isinstance(receipt, dict):
+        raise ValueError("SANDBOXED requires a test_receipt object")
+    if receipt.get("status") != "PASS":
+        raise ValueError("SANDBOXED requires a passing test receipt")
+    if receipt.get("skill_id") != skill_id:
+        raise ValueError("test receipt skill_id does not match candidate")
+    if receipt.get("skill_version") != version:
+        raise ValueError("test receipt skill_version does not match candidate")
+    if (
+        not isinstance(receipt.get("test_run_id"), str)
+        or not receipt["test_run_id"].strip()
+    ):
+        raise ValueError("test receipt requires test_run_id")
+    if receipt.get("isolated") is not True:
+        raise ValueError("test receipt must attest isolated execution")
+    artifact_hash = receipt.get("artifact_sha256")
+    if not isinstance(artifact_hash, str) or not re.fullmatch(
+        r"[0-9a-f]{64}", artifact_hash
+    ):
+        raise ValueError("test receipt requires a lowercase SHA-256 artifact hash")
+    return receipt
+
+
+def _receipt_hash(receipt: dict[str, Any]) -> str:
+    canonical = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _validate_admission_receipt(
+    receipt: Any,
+    *,
+    skill_id: str,
+    version: str,
+    test_receipt: dict[str, Any],
+) -> None:
+    if not isinstance(receipt, dict):
+        raise ValueError("ENABLED requires an admission_receipt object")
+    if receipt.get("decision") != "APPROVED":
+        raise ValueError("ENABLED requires an approved admission receipt")
+    if receipt.get("skill_id") != skill_id:
+        raise ValueError("admission receipt skill_id does not match candidate")
+    if receipt.get("skill_version") != version:
+        raise ValueError("admission receipt skill_version does not match candidate")
+    for field in ("review_id", "reviewer_id"):
+        if not isinstance(receipt.get(field), str) or not receipt[field].strip():
+            raise ValueError(f"admission receipt requires {field}")
+    if receipt.get("test_receipt_sha256") != _receipt_hash(test_receipt):
+        raise ValueError("admission receipt does not bind to the stored test receipt")
 
 
 def propose_skill(
@@ -67,7 +137,7 @@ def advance_skill(
         raise ValueError(f"invalid skill status: {new_status}")
     with connect() as db:
         row = db.execute(
-            "SELECT id,name,status,evidence FROM skills WHERE id=?",
+            "SELECT id,name,version,status,evidence FROM skills WHERE id=?",
             (skill_id,),
         ).fetchone()
         if not row:
@@ -78,22 +148,51 @@ def advance_skill(
             raise ValueError(
                 f"illegal transition {current} -> {new_status}"
             )
+        existing = _decode_evidence(row["evidence"])
+        if evidence is not None and not isinstance(evidence, dict):
+            raise ValueError("evidence must be an object")
+        merged = {**existing, **(evidence or {})}
+
+        if (
+            current != "PROPOSED"
+            and "test_receipt" in (evidence or {})
+            and evidence["test_receipt"] != existing.get("test_receipt")
+        ):
+            raise ValueError("stored test receipt is immutable after sandboxing")
+        if (
+            current == "ENABLED"
+            and "admission_receipt" in (evidence or {})
+            and evidence["admission_receipt"] != existing.get("admission_receipt")
+        ):
+            raise ValueError("stored admission receipt is immutable after enablement")
+
+        test_receipt = None
+        if current == "PROPOSED" and new_status == "SANDBOXED":
+            test_receipt = _validate_test_receipt(
+                merged.get("test_receipt"),
+                skill_id=skill_id,
+                version=row["version"],
+            )
+        elif current == "SANDBOXED" and new_status == "ENABLED":
+            # The sandboxed test receipt is immutable during admission.
+            test_receipt = _validate_test_receipt(
+                existing.get("test_receipt"),
+                skill_id=skill_id,
+                version=row["version"],
+            )
+            _validate_admission_receipt(
+                merged.get("admission_receipt"),
+                skill_id=skill_id,
+                version=row["version"],
+                test_receipt=test_receipt,
+            )
+
         ts = now()
-        if evidence is not None:
-            merged = json.loads(row["evidence"] or "{}")
-            if not isinstance(merged, dict):
-                merged = {"prior": merged}
-            merged.update(evidence)
-            evidence_s = json.dumps(merged, sort_keys=True)
-            db.execute(
-                "UPDATE skills SET status=?, evidence=?, updated=? WHERE id=?",
-                (new_status, evidence_s, ts, skill_id),
-            )
-        else:
-            db.execute(
-                "UPDATE skills SET status=?, updated=? WHERE id=?",
-                (new_status, ts, skill_id),
-            )
+        evidence_s = json.dumps(merged, sort_keys=True)
+        db.execute(
+            "UPDATE skills SET status=?, evidence=?, updated=? WHERE id=?",
+            (new_status, evidence_s, ts, skill_id),
+        )
     event(
         "skill.advanced",
         {
