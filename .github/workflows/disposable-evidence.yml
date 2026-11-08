@@ -32,6 +32,8 @@ jobs:
         run: python3 tests/test_hermes_route.py
       - name: Host read-only receipt fails closed
         run: python3 tests/test_host_receipt.py
+      - name: Liquid Neurology research arrays
+        run: python3 -m unittest discover -s tests -p 'test_liquid_neurology_arrays.py'
       - name: Explicit evidence boundary
         run: |
           echo "CI tests disposable/local behavior only."
