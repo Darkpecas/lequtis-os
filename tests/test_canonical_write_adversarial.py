@@ -17,10 +17,11 @@ class CanonicalWriteAdversarial(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.scratch = tempfile.TemporaryDirectory(prefix="lequtis-adversarial-")
-        cls.prior = {k: os.environ.get(k) for k in ("LEQUTIS_ROOT", "LEQUTIS_STATE", "LEQUTIS_CANONICAL_WRITE")}
+        cls.prior = {k: os.environ.get(k) for k in ("LEQUTIS_ROOT", "LEQUTIS_STATE", "LEQUTIS_CANONICAL_WRITE", "LEQUTIS_TRUSTED_LOCAL_TRANSPORT")}
         os.environ["LEQUTIS_ROOT"] = str(ROOT)
         os.environ["LEQUTIS_STATE"] = cls.scratch.name
         os.environ["LEQUTIS_CANONICAL_WRITE"] = "1"
+        os.environ["LEQUTIS_TRUSTED_LOCAL_TRANSPORT"] = "1"
         import lequtis, canonical_write
         cls.L = lequtis
         cls.W = canonical_write
@@ -67,6 +68,16 @@ class CanonicalWriteAdversarial(unittest.TestCase):
             if previous is not None:
                 os.environ["LEQUTIS_STATE"] = previous
         self.assertEqual(self.counts(), before)
+
+    def test_025_untrusted_transport_changes_nothing(self):
+        before = self.counts()
+        os.environ["LEQUTIS_TRUSTED_LOCAL_TRANSPORT"] = "0"
+        try:
+            result = self.W.canonical_commit(self.intent("untrusted-transport"))
+            self.assertEqual(result["reason"], "trusted_transport_not_attested")
+            self.assertEqual(self.counts(), before)
+        finally:
+            os.environ["LEQUTIS_TRUSTED_LOCAL_TRANSPORT"] = "1"
 
     def test_03_concurrent_replay_one_event(self):
         packet = self.intent("concurrency-adversarial")
