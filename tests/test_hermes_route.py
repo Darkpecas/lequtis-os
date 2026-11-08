@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,6 +44,44 @@ def test_live_refuses_without_credentials() -> None:
     print("  PASS")
 
 
+def test_local_hermes_cannot_verify_live_hostinger() -> None:
+    print("TEST ROUTE: local Hermes binary cannot certify Hostinger live")
+    with tempfile.TemporaryDirectory(prefix="lequtis-hermes-probe-") as temp_dir:
+        temp_path = Path(temp_dir)
+        fake_bin = temp_path / "hermes-fake"
+        fake_bin.write_text("#!/bin/sh\nprintf 'Hermes local fake 1.0\\n'\n", encoding="utf-8")
+        fake_bin.chmod(0o755)
+        old_path = os.environ.get("PATH", "")
+        env = {
+            "LEQUTIS_HERMES_ROUTE": "live",
+            "LEQUTIS_TUNNEL_ID": "test-tunnel-id",
+            "LEQUTIS_TUNNEL_API_KEY": "TEST-ONLY-SECRET",
+            "LEQUTIS_HERMES_BIN": str(fake_bin),
+            "PATH": old_path,
+        }
+        previous = {key: os.environ.get(key) for key in env}
+        try:
+            os.environ.update(env)
+            report = R.establish_route_and_probe("live")
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+    assert report["principal"]["authorized"] is True
+    assert report["receipt"]["ok"] is True
+    assert report["receipt"]["live_host"] is False
+    assert report["live_host"] is False
+    assert report["receipt"]["detail"]["probe_scope"] == "local_binary_only"
+    assert report["receipt"]["detail"]["remote_tunnel_probe_required"] is True
+    assert report["gates"]["G02"] == "PARTIAL"
+    assert report["gates"]["G03"] == "PARTIAL"
+    assert "TEST-ONLY-SECRET" not in json_blob(report)
+    print("  PASS")
+
+
 def test_receipt_redacts_secrets() -> None:
     print("TEST ROUTE: receipts redact secret-like fields")
     os.environ["LEQUTIS_TUNNEL_API_KEY"] = "SUPERSECRET-VALUE-XYZ"
@@ -75,6 +114,7 @@ def json_blob(obj) -> str:
 def main() -> int:
     test_disposable_route_receipt()
     test_live_refuses_without_credentials()
+    test_local_hermes_cannot_verify_live_hostinger()
     test_receipt_redacts_secrets()
     print()
     print("=== LEQUTIS HERMES ROUTE TESTS: ALL PASS ===")

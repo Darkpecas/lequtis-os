@@ -1,18 +1,19 @@
 # ChatGPT → Hermes route (G02 / G03)
 
-Disposable contract for the authorized bridge. **Live Hostinger remains OPEN**
-until Alan supplies tunnel credentials on the host.
+Disposable contract for the authorized bridge. **Live Hostinger remains OPEN.**
+This route module has no tunnel transport; environment flags and a local Hermes
+binary check cannot contact or verify Hostinger.
 
 ```sh
 # Disposable (default)
 python3 runtime/chatgpt_hermes_route/route.py
 python3 tests/test_hermes_route.py
 
-# Live attempt (operator only — never paste secrets into chat)
+# Local Hermes check only (does not contact Hostinger or verify a live route)
 LEQUTIS_HERMES_ROUTE=live \
-LEQUTIS_TUNNEL_ID=... \
-LEQUTIS_TUNNEL_API_KEY=... \
 python3 runtime/chatgpt_hermes_route/route.py
 ```
 
-Receipts always redact key/token/secret fields and set `live_host` honestly.
+The local check always reports `live_host: false` and keeps G02/G03 partial.
+Those gates can only advance after an actual tunneled probe returns an auditable
+remote receipt. Receipts redact key/token/secret fields.
