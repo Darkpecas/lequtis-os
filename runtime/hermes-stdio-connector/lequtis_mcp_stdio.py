@@ -181,7 +181,8 @@ if HERMES_QUERY_ENABLED:
     )
 
 
-if os.environ.get("LEQUTIS_CANONICAL_WRITE") == "1":
+if (os.environ.get("LEQUTIS_CANONICAL_WRITE") == "1" and
+        os.environ.get("LEQUTIS_TRUSTED_LOCAL_TRANSPORT") == "1"):
     TOOLS.append(
         {
             "name": "lequtis_canonical_commit",
@@ -263,7 +264,7 @@ def handle(msg: dict[str, Any]) -> dict[str, Any] | None:
                     "version": "1.2.22-reconstructed",
                 },
                 "instructions": (
-                    "Integration candidate. Read-only by default; canonical writes require LEQUTIS_CANONICAL_WRITE=1. "
+                    "Integration candidate. Read-only by default; canonical writes require BOTH LEQUTIS_CANONICAL_WRITE=1 and LEQUTIS_TRUSTED_LOCAL_TRANSPORT=1. "
                     "Not a Hostinger live proof. hermes_query requires LEQUTIS_HERMES_QUERY=1."
                 ),
             },
