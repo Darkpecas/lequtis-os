@@ -144,8 +144,9 @@ class DisposableFakeRoute:
 
 class LiveHostingerRoute:
     """
-    Real route attempt. Refuses unless LEQUTIS_HERMES_ROUTE=live and tunnel
-    credentials are present. Still does NOT invent success without binary probe.
+    Local Hermes binary probe guarded by the intended live-route configuration.
+    This module has no tunnel transport, so it must never claim a live Hostinger
+    route from local configuration or a local ``hermes --version`` response.
     """
 
     name = "chatgpt_tunnel_hostinger"
@@ -190,11 +191,16 @@ class LiveHostingerRoute:
         if not path:
             return make_receipt(
                 route=self.name,
-                live_host=True,
+                live_host=False,
                 ok=False,
                 principal=principal.id,
                 tool="hermes_probe",
-                detail={"reason": "hermes_binary_not_found", "binary": binary},
+                detail={
+                    "reason": "hermes_binary_not_found",
+                    "binary": binary,
+                    "probe_scope": "local_binary_only",
+                    "remote_tunnel_probe_required": True,
+                },
             )
         try:
             proc = subprocess.run(
@@ -207,15 +213,19 @@ class LiveHostingerRoute:
         except subprocess.TimeoutExpired:
             return make_receipt(
                 route=self.name,
-                live_host=True,
+                live_host=False,
                 ok=False,
                 principal=principal.id,
                 tool="hermes_probe",
-                detail={"reason": "hermes_probe_timeout"},
+                detail={
+                    "reason": "hermes_probe_timeout",
+                    "probe_scope": "local_binary_only",
+                    "remote_tunnel_probe_required": True,
+                },
             )
         return make_receipt(
             route=self.name,
-            live_host=True,
+            live_host=False,
             ok=proc.returncode == 0,
             principal=principal.id,
             tool="hermes_probe",
@@ -224,6 +234,8 @@ class LiveHostingerRoute:
                 "returncode": proc.returncode,
                 "stdout": (proc.stdout or "")[:2000],
                 "stderr": (proc.stderr or "")[:2000],
+                "probe_scope": "local_binary_only",
+                "remote_tunnel_probe_required": True,
             },
         )
 
