@@ -1,0 +1,36 @@
+name: LeQutis disposable evidence
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      LEQUTIS_HERMES_QUERY: ""
+      LEQUTIS_WORKER: deterministic
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Autonomous loop integration
+        run: python3 tests/autonomous_loop_test.py
+      - name: Independent verification and parity
+        run: python3 tests/test_skills_verifier_parity.py
+      - name: Safe worker routing
+        run: python3 tests/test_workers.py
+      - name: Stdio connector fail-closed
+        run: python3 tests/test_bridge.py
+      - name: Preflight contract
+        run: python3 tests/test_host_preflight.py
+      - name: Hermes route cannot fake live proof
+        run: python3 tests/test_hermes_route.py
+      - name: Explicit evidence boundary
+        run: |
+          echo "CI tests disposable/local behavior only."
+          echo "No Hostinger tunnel, canonical production database, or live Hermes claims."
