@@ -516,6 +516,41 @@ def verify_events():
     return {"valid": True, "events": len(rows), "evidence_label": EVIDENCE_LABEL}
 
 
+def verify_event_chain():
+    """Shape expected by the unchanged Hermes stdio adapter.
+
+    The hash is the same walk as verify_events. The adapter reads ``ok``.
+    """
+    previous = "GENESIS"
+    with connect() as db:
+        rows = db.execute(
+            "SELECT seq,ts,event_type,payload,previous_hash,event_hash FROM events ORDER BY seq"
+        ).fetchall()
+    if not rows:
+        return {"ok": True, "count": 0, "tip": "GENESIS", "evidence_label": EVIDENCE_LABEL}
+    for row in rows:
+        raw = previous + "|" + row["ts"] + "|" + row["event_type"] + "|" + row["payload"]
+        expected = hashlib.sha256(raw.encode()).hexdigest()
+        if row["previous_hash"] != previous:
+            return {
+                "ok": False,
+                "count": len(rows),
+                "broken_at": row["seq"],
+                "reason": "previous_hash_mismatch",
+                "evidence_label": EVIDENCE_LABEL,
+            }
+        if row["event_hash"] != expected:
+            return {
+                "ok": False,
+                "count": len(rows),
+                "broken_at": row["seq"],
+                "reason": "event_hash_mismatch",
+                "evidence_label": EVIDENCE_LABEL,
+            }
+        previous = row["event_hash"]
+    return {"ok": True, "count": len(rows), "tip": previous, "evidence_label": EVIDENCE_LABEL}
+
+
 def attempt_stale_complete(execution_id, token):
     with connect() as db:
         row = db.execute("SELECT status,lease_token FROM executions WHERE id=?", (execution_id,)).fetchone()

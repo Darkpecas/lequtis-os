@@ -18,12 +18,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Autonomous loop integration
-        run: python3 tests/autonomous_loop_test.py
-      - name: Independent verification and parity
-        run: python3 tests/test_skills_verifier_parity.py
-      - name: Safe worker routing
-        run: python3 tests/test_workers.py
+      # Kernel v3 replaced run_loop, the skills lifecycle, and worker-driven
+      # THINK/CHOOSE. Those scripts still import that surface and are not the
+      # gate for this kernel. Disposable proof is the v3 suite plus the
+      # adapters that still call into core/lequtis.py.
+      - name: Kernel v3 disposable proof
+        run: python3 -W error::ResourceWarning -m unittest discover -s tests -p 'test_*.py' -v
       - name: Stdio connector fail-closed
         run: python3 tests/test_bridge.py
       - name: Preflight contract
