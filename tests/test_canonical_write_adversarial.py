@@ -56,6 +56,18 @@ class CanonicalWriteAdversarial(unittest.TestCase):
         finally:
             os.environ["LEQUTIS_CANONICAL_WRITE"] = "1"
 
+    def test_025_missing_explicit_state_refuses_write(self):
+        before = self.counts()
+        previous = os.environ.pop("LEQUTIS_STATE", None)
+        try:
+            result = self.W.canonical_commit(self.intent("implicit-state-adversarial"))
+            self.assertFalse(result["ok"], result)
+            self.assertEqual(result["reason"], "explicit_state_required")
+        finally:
+            if previous is not None:
+                os.environ["LEQUTIS_STATE"] = previous
+        self.assertEqual(self.counts(), before)
+
     def test_03_concurrent_replay_one_event(self):
         packet = self.intent("concurrency-adversarial")
         with ThreadPoolExecutor(max_workers=6) as pool:
