@@ -27,9 +27,9 @@ Current milestone:
 
 LIVING KERNEL
 
-## REQUIRED NEXT MILESTONE
+## CURRENT MILESTONE (DONE LOCALLY)
 
-Implement the missing autonomous execution layer:
+Autonomous execution layer is implemented and disposable-tested:
 
 NOTICE
 -> THINK
@@ -40,6 +40,15 @@ NOTICE
 -> LEARN
 -> REMEMBER
 -> UPDATE AGENDA
+
+Also local: G01 stdio connector, cognitive workers, G07 verifier, G11 parity,
+skills lifecycle, Beast loopback LIVE path.
+
+## REQUIRED NEXT MILESTONE (OPERATOR-GATED)
+
+Prove one independently verified sovereign loop **with Hermes** when authorized
+(G02/G03 live receipts → G06 harmless task). Do not claim Hostinger live from
+cloud-only evidence. Apply `lequtis-os-patches/` to canonical `Darkpecas/lequtis-os`.
 
 ## HARD RULES
 
