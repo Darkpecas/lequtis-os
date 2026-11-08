@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -107,6 +108,31 @@ def test_tools_call_mcp_shape(state: Path) -> None:
     print("  PASS")
 
 
+def test_stdio_subprocess_framing(state: Path) -> None:
+    print("TEST BRIDGE: newline-delimited JSON over subprocess streams")
+    env = os.environ.copy()
+    env["LEQUTIS_ROOT"] = str(ROOT)
+    env["LEQUTIS_STATE"] = str(state)
+    env.pop("LEQUTIS_HERMES_QUERY", None)
+    messages = [
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+         "params": {"protocolVersion": "2024-11-05", "capabilities": {}}},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+    ]
+    wire = "".join(json.dumps(m, separators=(",", ":")) + "\\n" for m in messages)
+    proc = subprocess.run(
+        [sys.executable, str(CONNECTOR / "lequtis_mcp_stdio.py")],
+        input=wire, text=True, capture_output=True, timeout=5, env=env, check=True,
+    )
+    replies = [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
+    assert [reply["id"] for reply in replies] == [1, 2], proc.stdout
+    assert replies[0]["result"]["serverInfo"]["name"] == "lequtis-hermes-stdio"
+    assert "lequtis_status" in {
+        tool["name"] for tool in replies[1]["result"]["tools"]
+    }
+    print("  PASS")
+
+
 def main() -> int:
     base = Path(tempfile.mkdtemp(prefix="lequtis-bridge-"))
     try:
@@ -114,6 +140,7 @@ def main() -> int:
         test_status_and_chain(base / "b")
         test_query_disabled_and_no_synthetic_live(base / "c")
         test_tools_call_mcp_shape(base / "d")
+        test_stdio_subprocess_framing(base / "e")
         print()
         print("=== LEQUTIS STDIO BRIDGE TESTS: ALL PASS ===")
         return 0
