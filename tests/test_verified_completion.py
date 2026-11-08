@@ -184,6 +184,43 @@ print(json.dumps({"status": task[0], "memory": memory[0], "chain": L.verify_even
         data = json.loads(result.stdout)
         self.assertEqual(data, {"status": "completed", "memory": "learning.attested_not_live", "chain": True})
 
+    def test_11_mcp_envelope_roundtrip_in_fresh_process(self):
+        p = self.records("verifier-mcp")
+        envelope = self.envelope(p)
+        env = os.environ.copy()
+        env["LEQUTIS_VERIFIER_HMAC_KEY"] = KEY.decode()
+        script = """
+import json, sys
+import lequtis_mcp_stdio as adapter
+assert "lequtis_attest_completion" in adapter.handshake_once()["tools"]
+envelope = json.loads(sys.stdin.read())
+response = adapter.handle({"jsonrpc":"2.0","id":7,"method":"tools/call",
+                           "params":{"name":"lequtis_attest_completion","arguments":envelope}})
+print(json.dumps(response["result"]["structuredContent"]))
+"""
+        proc = subprocess.run([sys.executable, "-c", script], cwd=ROOT / "runtime" / "hermes-stdio-connector",
+                              env=env, input=json.dumps(envelope), capture_output=True, text=True, check=True)
+        result = json.loads(proc.stdout)
+        self.assertTrue(result["ok"], result)
+        self.assertFalse(result["live_verified"])
+        self.assertTrue(self.L.verify_event_chain()["ok"])
+
+    def test_12_mcp_attestation_hidden_without_host_gate(self):
+        env = os.environ.copy()
+        env.pop("LEQUTIS_VERIFIER_COMPLETION", None)
+        script = """
+import json
+import lequtis_mcp_stdio as adapter
+names = adapter.handshake_once()["tools"]
+assert "lequtis_attest_completion" not in names
+result = adapter.call_tool("lequtis_attest_completion", {})
+assert result["reason"] == "verifier_completion_disabled"
+print(json.dumps({"gate": "PASS"}))
+"""
+        proc = subprocess.run([sys.executable, "-c", script], cwd=ROOT / "runtime" / "hermes-stdio-connector",
+                              env=env, capture_output=True, text=True, check=True)
+        self.assertEqual(json.loads(proc.stdout)["gate"], "PASS")
+
     def test_99_tamper_rejected_without_mutation(self):
         p = self.records("verifier-tamper")
         with self.L.connect() as db:
