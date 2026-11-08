@@ -1,102 +1,13 @@
-# LeQutisOS
+# LeQutisOS kernel
 
-Canonical GitHub home: **https://github.com/Darkpecas/lequtis-os**
+LOCAL PROOF, NOT LIVE VPS VERIFIED.
 
-LeQutis is a proactive, autonomous, self-improving AI partner.
+This directory is the working kernel extended from public commit `dd77615b97872ee25a98ef95b6314ab177252af6`. It is not GitHub `main`, and pull request 1 was not merged.
 
-LeQutis owns identity, memory, agenda, skills, evidence and evolutionary history.
-Models and tools are replaceable workers — never senior to LeQutis.
+`database/schema.sql` creates the tables `core/lequtis.py` creates, at revision `lequtis-os-kernel-3`. Opening a database from the unmodified `dd77615` kernel fails closed and does not alter it.
 
-## Where the body of work lives
-
-External stores are evidence feeds, not senior authority:
-
-| Store | Role |
-| --- | --- |
-| **GitHub `Darkpecas/lequtis-os`** | Canonical runtime / kernel home |
-| Google Docs / Google Drive | Main durable prose + attachments |
-| iCloud | Mobile chats / backups / Files |
-| ChatGPT / Gemini | Conversation corpora (workers) |
-| NotebookLM | Grounded research notebooks |
-| Obsidian + personal graph SOPs | SOPs and personal knowledge graph |
+`goal --key` replays the same title without a second agenda item. A different title with that key is rejected. `run-once` writes one allowlisted artifact and asks `core/verifier_main.py`, a separate process, to check its path, hash, and correlation id. A rejected verdict leaves the agenda incomplete. `recover` does not take a lease whose process is still alive. After that process is killed, the old lease token cannot complete the agenda.
 
 ```sh
-python3 core/lequtis.py sources list
-python3 core/lequtis.py assimilate          # docs/evidence
-python3 core/lequtis.py ingest              # knowledge/inbox/<source_id>/
-python3 core/lequtis.py gates               # LIVE LOOP gate ledger
-python3 core/lequtis.py seed-gates          # open/partial gates → agenda
+python -m unittest discover -s tests -p 'test_*.py' -v
 ```
-
-Google Drive is often connected in Desktop Cursor but **not** in a given cloud
-agent run. If Drive MCP shows `needsAuth`, drop Doc exports into
-`knowledge/inbox/google_docs/` instead of re-prompting auth.
-
-## Architecture
-
-- `core/` — living kernel + autonomous loop
-- `knowledge/` — source registry (`SOURCES.yaml` / `SOURCES.json`)
-- `database/` — persistent state schema
-- `tests/` — disposable integration evidence
-- `docs/evidence/` — assimilated export pack
-- `state/` — runtime SQLite WAL DB (gitignored)
-- `logs/` — runtime logs (gitignored)
-
-## Autonomous loop
-
-```
-NOTICE → THINK → CHOOSE → ACT → OBSERVE → EVALUATE → LEARN → REMEMBER → UPDATE AGENDA
-```
-
-Every phase emits a hash-chained audit event.
-
-## Quick start
-
-```sh
-python3 core/lequtis.py init
-python3 core/lequtis.py goal "Inspect kernel status via autonomous loop"
-python3 core/lequtis.py loop
-python3 core/lequtis.py verify
-python3 core/lequtis.py verify-independent
-python3 core/lequtis.py parity
-python3 core/lequtis.py skills propose "example-skill"
-python3 core/lequtis.py search "LeQutis"
-python3 tests/autonomous_loop_test.py
-python3 tests/test_skills_verifier_parity.py
-./doctor.sh
-```
-
-`doctor.sh` and `tests/smoke.sh` use disposable state and do not touch an
-existing LeQutis database. Use the read-only Hermes host preflight when checking
-an existing installation.
-
-Host vs phone roles: see repo-root `COMPUTER_REQUIREMENTS.md`.
-
-Disposable tests never touch production state. Set `LEQUTIS_STATE` to point at a temp directory.
-
-## Cognitive workers (THINK / CHOOSE)
-
-Replaceable workers rank and propose; **ACT stays the safe registry**.
-
-```sh
-# default
-LEQUTIS_WORKER=deterministic python3 core/lequtis.py loop
-
-# external JSON script worker
-LEQUTIS_WORKER=script LEQUTIS_WORKER_SCRIPT=/path/to/worker.py python3 core/lequtis.py loop
-
-# OpenAI-compatible HTTP worker (optional)
-LEQUTIS_WORKER=openai LEQUTIS_WORKER_URL=https://api.openai.com/v1/chat/completions \
-  LEQUTIS_WORKER_MODEL=gpt-4o-mini LEQUTIS_WORKER_API_KEY=... python3 core/lequtis.py loop
-```
-
-Unsafe proposals are rejected and fall back to deterministic policy.
-
-## Safe actions
-
-Registered actions only: `inspect_status`, `store_note`, `ping`, `deliberate_fail`.
-No arbitrary destructive system execution.
-
-## Brahma Evo
-
-Brahma Evo is a research candidate only. Its licence forbids importing its source into LeQutis. Patterns may be independently reimplemented under LeQutis governance — never as a rival sovereign brain.
