@@ -160,6 +160,29 @@ TOOLS: list[dict[str, Any]] = [
     },
 ]
 
+# Write is listed only after explicit host opt-in. Calling it also checks
+# the trusted local transport attestation and existing DB.
+CANONICAL_WRITE_ENABLED = os.environ.get("LEQUTIS_CANONICAL_WRITE") == "1"
+if CANONICAL_WRITE_ENABLED:
+    TOOLS.append({
+        "name": "lequtis_commit_record",
+        "description": ("Persist bounded task intent, unverified receipt and optional memory "
+                        "atomically. Host-authenticated local transport required. "
+                        "Never claims independent verification or live Hostinger proof."),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "key": {"type": "string", "minLength": 8, "maxLength": 128},
+                "title": {"type": "string", "maxLength": 256},
+                "receipt": {"type": "object"},
+                "memory": {"type": "string", "maxLength": 8192},
+                "memory_kind": {"type": "string", "enum": ["observation", "learning", "research", "operational"]},
+            },
+            "required": ["key", "title", "receipt"],
+            "additionalProperties": False,
+        },
+    })
+
 if HERMES_QUERY_ENABLED:
     TOOLS.append(
         {
@@ -180,6 +203,18 @@ if HERMES_QUERY_ENABLED:
 
 def call_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, Any]:
     args = arguments or {}
+    if name == "lequtis_commit_record":
+        if not CANONICAL_WRITE_ENABLED:
+            return {"ok": False, "reason": "write_disabled"}
+        from canonical_write import commit_record
+        if not isinstance(args, dict):
+            return {"ok": False, "reason": "invalid_arguments"}
+        if set(args) - {"key", "title", "receipt", "memory", "memory_kind"}:
+            return {"ok": False, "reason": "unknown_arguments"}
+        return commit_record(
+            args.get("key"), args.get("title"), args.get("receipt"),
+            args.get("memory", ""), args.get("memory_kind", "observation"),
+        )
     if name == "lequtis_status":
         return tool_lequtis_status()
     if name == "lequtis_verify_events":
