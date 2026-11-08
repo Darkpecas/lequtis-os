@@ -147,9 +147,19 @@ def verify_independent(
             ):
                 correlated.append(row["event_type"])
 
-        # Fall back: if loop_runs exists and chain ok, require task row match.
-        task_ok = True
+        # Require completion artifacts for this specific run, not merely an
+        # intact global ledger or an uncorrelated loop event from another run.
+        run_ok = run["status"] == "completed" and bool(run["task_id"])
+        required_correlated = {"loop.started", "loop.completed"}
+        correlated_ok = required_correlated.issubset(set(correlated))
+        task_ok = run_ok and correlated_ok
         task_detail: dict[str, Any] = {}
+        if not run_ok:
+            task_detail["reason"] = "run_incomplete_or_task_missing"
+        if not correlated_ok:
+            task_detail["correlation_events_missing"] = sorted(
+                required_correlated - set(correlated)
+            )
         task_id = run["task_id"]
         if task_id:
             task = db.execute(
@@ -193,7 +203,7 @@ def verify_independent(
         findings.append(
             {
                 "severity": "loop_run",
-                "ok": True,
+                "ok": run_ok,
                 "correlation_id": correlation_id,
                 "phase": run["phase"],
                 "status": run["status"],
@@ -219,7 +229,7 @@ def verify_independent(
             }
         )
 
-        ok = task_ok and chain.get("ok") is True
+        ok = run_ok and correlated_ok and task_ok and chain.get("ok") is True
         return {
             "ok": ok,
             "mode": "independent",
