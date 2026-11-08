@@ -27,6 +27,9 @@ def run():
         assert canonical_write.canonical_commit(intent)["reason"] == "canonical_write_disabled"
         assert "lequtis_canonical_commit" not in adapter.handshake_once()["tools"]
         os.environ["LEQUTIS_CANONICAL_WRITE"] = "1"
+        os.environ.pop("LEQUTIS_TRUSTED_LOCAL_TRANSPORT", None)
+        assert canonical_write.canonical_commit(intent)["reason"] == "trusted_transport_not_attested"
+        os.environ["LEQUTIS_TRUSTED_LOCAL_TRANSPORT"] = "1"
         assert canonical_write.canonical_commit({**intent, "action": "shell"})["ok"] is False
         initial = canonical_write.canonical_commit(intent)
         assert initial["ok"] and not initial["duplicate"], initial
