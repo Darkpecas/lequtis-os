@@ -127,15 +127,28 @@ def sanitize_candidate(raw: dict[str, Any], noticed: dict[str, Any]) -> dict[str
     kind = str(raw.get("kind") or "goal")
     if action not in SAFE_ACTIONS or kind not in SAFE_KINDS:
         return None
+    noticed_tasks = {
+        str(t.get("id")): t for t in noticed.get("unfinished_tasks") or []
+    }
+    requested_task_id = str(raw.get("task_id") or "")
+    if kind == "resume" and requested_task_id not in noticed_tasks:
+        return None
+    resume_task = noticed_tasks.get(requested_task_id) if kind == "resume" else None
+    if resume_task and action != resume_task.get("action"):
+        return None
     out = {
         "kind": kind,
         "task_id": raw.get("task_id"),
         "action": action,
         "agenda_id": raw.get("agenda_id"),
         "reason": str(raw.get("reason") or f"worker:{kind}"),
-        "idempotency_key": str(
-            raw.get("idempotency_key")
-            or f"worker:{kind}:{action}:{raw.get('agenda_id') or raw.get('task_id') or 'x'}"
+        "idempotency_key": (
+            str(resume_task.get("idempotency_key"))
+            if resume_task
+            else str(
+                raw.get("idempotency_key")
+                or f"worker:{kind}:{action}:{raw.get('agenda_id') or raw.get('task_id') or 'x'}"
+            )
         ),
         "payload": raw.get("payload") if isinstance(raw.get("payload"), dict) else {},
     }
