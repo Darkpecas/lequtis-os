@@ -147,6 +147,16 @@ def test_independent_verifier(state: Path) -> None:
         db.execute("DELETE FROM tasks WHERE id=?", (tid,))
     bad = L.verify_independent("verify-ind-1")
     assert bad["ok"] is False, bad
+
+    with L.connect() as db:
+        db.execute(
+            "INSERT INTO loop_runs (id,correlation_id,phase,status,task_id,evidence,created,updated) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            ("run-empty", "verify-empty-run", "NOTICE", "running", None, "{}",
+             "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"),
+        )
+    empty = L.verify_independent("verify-empty-run")
+    assert empty["ok"] is False, empty
     print("  PASS")
 
 
