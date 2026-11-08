@@ -3,8 +3,10 @@ set -eu
 ROOT="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 
+test_state="$(mktemp -d "$ROOT/.lequtis-doctor.XXXXXX")"
+trap 'rm -rf "$test_state"' EXIT HUP INT TERM
 export LEQUTIS_ROOT="$ROOT"
-export LEQUTIS_STATE="${LEQUTIS_STATE:-$ROOT/state}"
+export LEQUTIS_STATE="$test_state"
 
 echo "=== LEQUTIS DOCTOR ==="
 
@@ -13,7 +15,7 @@ python3 core/lequtis.py init
 
 echo
 echo "Database:"
-ls -lh state/lequtis.db 2>/dev/null || ls -lh "$LEQUTIS_STATE/lequtis.db"
+ls -lh "$LEQUTIS_STATE/lequtis.db"
 
 echo
 echo "Integrity smoke test:"
