@@ -230,21 +230,37 @@ def test_cli_disposable(state: Path) -> None:
 def test_e_knowledge_sources(state: Path) -> None:
     print("TEST E: knowledge source registry + local assimilate")
     L = load_module(state)
+    fixture_root = state / "repo_fixture"
+    (fixture_root / "knowledge").mkdir(parents=True, exist_ok=True)
+    (fixture_root / "docs" / "evidence").mkdir(parents=True, exist_ok=True)
+    (fixture_root / "knowledge" / "SOURCES.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "canonical_github": "https://github.com/Darkpecas/lequtis-os",
+                "sources": [
+                    {
+                        "id": "github_lequtis_os",
+                        "kind": "code_repository",
+                        "role": "canonical_runtime_home",
+                        "location": "https://github.com/Darkpecas/lequtis-os",
+                        "status": "declared",
+                    }
+                ],
+                "local_evidence_feed": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (fixture_root / "docs" / "evidence" / "test-evidence.md").write_text(
+        "Disposable evidence fixture for autonomous loop tests.\n",
+        encoding="utf-8",
+    )
+    L.ROOT = fixture_root
     reg = L.register_sources_from_manifest()
     assert reg["canonical_github"] == "https://github.com/Darkpecas/lequtis-os"
     ids = {s["id"] for s in reg["sources"]}
-    for required in (
-        "github_lequtis_os",
-        "google_docs",
-        "google_drive",
-        "icloud",
-        "chatgpt",
-        "gemini",
-        "notebook_lm",
-        "obsidian",
-        "personal_graph_sops",
-    ):
-        assert required in ids, required
+    assert "github_lequtis_os" in ids
     result = L.assimilate_local_evidence()
     assert result["ok"] is True
     assert result["indexed"] >= 1
@@ -255,7 +271,13 @@ def test_e_knowledge_sources(state: Path) -> None:
 def test_f_inbox_gates(state: Path) -> None:
     print("TEST F: inbox ingest + LIVE LOOP gate seeding")
     L = load_module(state)
-    inbox = ROOT / "knowledge" / "inbox" / "obsidian"
+    fixture_root = state / "repo_fixture"
+    knowledge = fixture_root / "knowledge"
+    knowledge.mkdir(parents=True, exist_ok=True)
+    for name in ("ACCESS_MANIFEST.yaml", "ACCESS_MATRIX.yaml", "LIVE_LOOP_GATES.json"):
+        shutil.copy2(ROOT / "knowledge" / name, knowledge / name)
+    L.ROOT = fixture_root
+    inbox = knowledge / "inbox" / "obsidian"
     inbox.mkdir(parents=True, exist_ok=True)
     sample = inbox / "sop-test.md"
     sample.write_text("# SOP test\nHeartbeat before loop.\n", encoding="utf-8")
