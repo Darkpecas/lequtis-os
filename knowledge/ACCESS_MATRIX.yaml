@@ -1,0 +1,41 @@
+# Permission / capability matrix — observed only
+version: 1
+recorded: "2026-11-08"
+
+matrix:
+  - principal: cursor_cloud_agent
+    resource: github_lequtis_os_read
+    permission: allow
+    evidence: "gh api / clone succeeded"
+  - principal: cursor_cloud_agent
+    resource: github_lequtis_os_write
+    permission: deny
+    evidence: "git push HTTP 403 Resource not accessible by integration"
+  - principal: cursor_cloud_agent
+    resource: google_drive_mcp
+    permission: deny
+    evidence: "namespaceStatus=needsAuth; auth prompts declined"
+  - principal: cursor_cloud_agent
+    resource: local_lequtis_kernel
+    permission: allow
+    evidence: "doctor + autonomous_loop_test PASS in disposable state"
+  - principal: cursor_cloud_agent
+    resource: hermes_stdio_connector_local
+    permission: allow
+    evidence: "runtime/hermes-stdio-connector disposable tests PASS; live_host always false"
+  - principal: cursor_cloud_agent
+    resource: hermes_hostinger
+    permission: unknown
+    evidence: "No authenticated Hostinger/Hermes/tunnel tool in this session"
+  - principal: cursor_cloud_agent
+    resource: independent_verifier_local
+    permission: allow
+    evidence: "tests/test_skills_verifier_parity.py PASS"
+  - principal: cursor_cloud_agent
+    resource: skills_lifecycle_local
+    permission: allow
+    evidence: "skills propose/advance disposable tests PASS"
+  - principal: alan_operator
+    resource: all_stores
+    permission: owner
+    evidence: "declared by Alan; not independently re-verified here"
