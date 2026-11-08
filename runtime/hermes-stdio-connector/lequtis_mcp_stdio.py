@@ -209,8 +209,40 @@ if (os.environ.get("LEQUTIS_CANONICAL_WRITE") == "1" and
     )
 
 
+# Verifier completion is a SEPARATE host-gated candidate. A signed receipt
+# proves verifier-key possession only, NOT independent live observation.
+VERIFIER_COMPLETION_ENABLED = (
+    os.environ.get("LEQUTIS_CANONICAL_WRITE") == "1"
+    and os.environ.get("LEQUTIS_TRUSTED_LOCAL_TRANSPORT") == "1"
+    and os.environ.get("LEQUTIS_VERIFIER_COMPLETION") == "1"
+)
+if VERIFIER_COMPLETION_ENABLED:
+    TOOLS.append({
+        "name": "lequtis_attest_completion",
+        "description": (
+            "Commit separately signed evaluation, memory and agenda to existing "
+            "canonical SQLite transaction. CRYPTOGRAPHIC ATTESTATION ONLY, "
+            "NOT live Hermes verification. Host authentication required."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "payload": {"type": "object"},
+                "signature": {"type": "string"},
+            },
+            "required": ["payload", "signature"],
+            "additionalProperties": False,
+        },
+    })
+
+
 def call_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, Any]:
     args = arguments or {}
+    if name == "lequtis_attest_completion":
+        if not VERIFIER_COMPLETION_ENABLED:
+            return {"ok": False, "reason": "verifier_completion_disabled", "live_verified": False}
+        from verified_completion import complete_with_verifier_attestation
+        return complete_with_verifier_attestation(args)
     if name == "lequtis_canonical_commit":
         return canonical_commit(args)
     if name == "lequtis_status":
