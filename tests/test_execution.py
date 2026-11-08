@@ -100,6 +100,50 @@ class ExecutionIntegrationTests(unittest.TestCase):
             [(1, "failed"), (2, "succeeded")],
         )
 
+    def test_retry_reuses_semantic_memory_if_later_step_fails(self):
+        self.run_cli("goal", "remember: do not duplicate this fact")
+        with sqlite3.connect(self.db_path) as db:
+            db.execute("""
+                CREATE TRIGGER fail_experience_memory
+                BEFORE INSERT ON memory WHEN NEW.kind='experience'
+                BEGIN SELECT RAISE(ABORT, 'injected learning failure'); END
+            """)
+
+        result = json.loads(self.run_cli("run-once", expected=1).stdout)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(
+            self.query("SELECT kind,content FROM memory"),
+            [("semantic", "do not duplicate this fact")],
+        )
+
+        with sqlite3.connect(self.db_path) as db:
+            db.execute("DROP TRIGGER fail_experience_memory")
+        agenda_id = self.query("SELECT id FROM agenda")[0][0]
+        self.run_cli("retry", agenda_id)
+        self.assertEqual(
+            json.loads(self.run_cli("run-once").stdout)["status"], "succeeded"
+        )
+        self.assertEqual(
+            self.query("SELECT kind,content FROM memory ORDER BY kind"),
+            [
+                (
+                    "experience",
+                    "Successful execution of agenda item: remember: "
+                    "do not duplicate this fact",
+                ),
+                ("semantic", "do not duplicate this fact"),
+            ],
+        )
+        self.assertEqual(
+            self.query(
+                "SELECT event_type,COUNT(*) FROM events "
+                "WHERE payload LIKE '%agenda_id%' AND event_type IN "
+                "('memory.created','memory.reused') GROUP BY event_type ORDER BY event_type"
+            ),
+            [("memory.created", 1), ("memory.reused", 1)],
+        )
+        self.assertEqual(json.loads(self.run_cli("verify-events").stdout)["valid"], True)
+
     def test_interrupted_work_requires_explicit_recovery_and_retry(self):
         self.run_cli("goal", "remember: survive a process restart")
         agenda_id = self.query("SELECT id FROM agenda")[0][0]

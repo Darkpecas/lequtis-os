@@ -138,6 +138,34 @@ def remember(content, kind="semantic"):
     event("memory.created", {"id": mid, "kind": kind})
     return mid
 
+
+def remember_for_agenda(content, agenda_id):
+    """Store an agenda action's semantic memory once, including across retries."""
+    mid = str(uuid.uuid5(uuid.NAMESPACE_URL, "lequtis:agenda-memory:" + agenda_id))
+    ts = now()
+
+    with connect() as db:
+        row = db.execute(
+            "SELECT kind,content FROM memory WHERE id=?", (mid,)
+        ).fetchone()
+        if row is None:
+            db.execute("""
+                INSERT INTO memory(id,kind,content,created,updated)
+                VALUES (?,?,?,?,?)
+            """, (mid, "semantic", content, ts, ts))
+            created = True
+        else:
+            if row != ("semantic", content):
+                raise RuntimeError("Agenda memory key conflicts with stored content")
+            created = False
+
+    event("memory.created" if created else "memory.reused", {
+        "id": mid,
+        "kind": "semantic",
+        "agenda_id": agenda_id,
+    })
+    return mid
+
 def add_goal(title, priority=10):
     gid = str(uuid.uuid4())
     ts = now()
@@ -294,7 +322,7 @@ def run_once():
         if not task["input"].strip():
             raise ValueError("remember action requires non-empty text")
 
-        memory_id = remember(task["input"])
+        memory_id = remember_for_agenda(task["input"], task["agenda_id"])
         with connect() as db:
             observed = db.execute(
                 "SELECT content FROM memory WHERE id=?", (memory_id,)
