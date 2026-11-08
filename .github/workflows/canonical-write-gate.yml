@@ -1,0 +1,26 @@
+name: canonical-write-gate
+on:
+  push:
+    branches:
+      - feature/canonical-write-gate-20261108
+  pull_request:
+    paths:
+      - 'runtime/hermes-stdio-connector/**'
+      - 'tests/test_canonical_write.py'
+      - '.github/workflows/canonical-write-gate.yml'
+jobs:
+  disposable-write:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile adapter and write implementation
+        run: python -m py_compile runtime/hermes-stdio-connector/canonical_write.py runtime/hermes-stdio-connector/lequtis_mcp_stdio.py
+      - name: Run disposable write and bridge tests
+        run: |
+          python tests/test_canonical_write.py
+          python tests/test_bridge.py
