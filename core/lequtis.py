@@ -267,6 +267,32 @@ def remember(content: str, kind: str = "semantic") -> str:
     return mid
 
 
+def remember_for_task(content: str, kind: str, idempotency_key: str) -> str:
+    """Persist a task memory once, including when a failed task is retried."""
+    mid = str(uuid.uuid5(uuid.NAMESPACE_URL, "lequtis:task-memory:" + idempotency_key))
+    ts = now()
+    with connect() as db:
+        row = db.execute(
+            "SELECT kind,content FROM memory WHERE id=?", (mid,)
+        ).fetchone()
+        if row is None:
+            db.execute(
+                "INSERT INTO memory(id,kind,content,created,updated) VALUES (?,?,?,?,?)",
+                (mid, kind, content, ts, ts),
+            )
+            created = True
+        else:
+            if row["kind"] != kind or row["content"] != content:
+                raise RuntimeError("Task memory key conflicts with stored content")
+            created = False
+    event("memory.created" if created else "memory.reused", {
+        "id": mid,
+        "kind": kind,
+        "idempotency_key": idempotency_key,
+    })
+    return mid
+
+
 def add_goal(title: str, priority: int = 10) -> str:
     gid = str(uuid.uuid4())
     ts = now()
@@ -342,7 +368,11 @@ def _action_inspect_status(_payload: dict[str, Any]) -> dict[str, Any]:
 
 def _action_store_note(payload: dict[str, Any]) -> dict[str, Any]:
     note = str(payload.get("note") or "autonomous loop observation")
-    mid = remember(note, kind="experience")
+    idempotency_key = payload.get("_idempotency_key")
+    if idempotency_key:
+        mid = remember_for_task(note, "experience", str(idempotency_key))
+    else:
+        mid = remember(note, kind="experience")
     return {"ok": True, "observation": {"memory_id": mid, "note": note}}
 
 
@@ -543,6 +573,7 @@ def act(choice: dict[str, Any]) -> dict[str, Any]:
     payload = json.loads(task["payload"] or "{}")
     if choice.get("payload"):
         payload = {**payload, **choice["payload"]}
+    payload["_idempotency_key"] = task["idempotency_key"]
 
     fn = ACTIONS.get(action_name)
     if fn is None:
