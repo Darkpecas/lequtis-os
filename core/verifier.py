@@ -138,6 +138,11 @@ def verify_independent(
         # Disposable loops may use shorter event names — also accept
         # any payload that embeds this correlation_id.
         correlated = []
+        correlated_phases: set[str] = set()
+        required_phases = {
+            "NOTICE", "THINK", "CHOOSE", "ACT", "OBSERVE",
+            "EVALUATE", "LEARN", "REMEMBER", "UPDATE_AGENDA",
+        }
         for row in phase_events:
             payload = _loads(row["payload"])
             if isinstance(payload, dict) and (
@@ -146,12 +151,18 @@ def verify_independent(
                 == correlation_id
             ):
                 correlated.append(row["event_type"])
+                phase = payload.get("phase")
+                if row["event_type"] == "loop.phase" and phase in required_phases:
+                    correlated_phases.add(phase)
 
         # Require completion artifacts for this specific run, not merely an
         # intact global ledger or an uncorrelated loop event from another run.
         run_ok = run["status"] == "completed" and bool(run["task_id"])
         required_correlated = {"loop.started", "loop.completed"}
-        correlated_ok = required_correlated.issubset(set(correlated))
+        correlated_ok = (
+            required_correlated.issubset(set(correlated))
+            and correlated_phases == required_phases
+        )
         task_ok = run_ok and correlated_ok
         task_detail: dict[str, Any] = {}
         if not run_ok:
@@ -159,6 +170,9 @@ def verify_independent(
         if not correlated_ok:
             task_detail["correlation_events_missing"] = sorted(
                 required_correlated - set(correlated)
+            )
+            task_detail["correlated_phases_missing"] = sorted(
+                required_phases - correlated_phases
             )
         task_id = run["task_id"]
         if task_id:
@@ -217,6 +231,8 @@ def verify_independent(
                 "ok": True,
                 "seen_loop_event_types": sorted(seen_types),
                 "correlated_events": correlated,
+                "correlated_phases": sorted(correlated_phases),
+                "correlated_phases_missing": sorted(required_phases - correlated_phases),
                 "missing_canonical_names": missing,
                 "note": "missing canonical names allowed if task+chain artifacts match",
             }
