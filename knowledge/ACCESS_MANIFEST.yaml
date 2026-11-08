@@ -1,0 +1,62 @@
+# LeQutis ACCESS_MANIFEST — observed evidence only
+# Do not mark routes live without receipts.
+version: 1
+owner: LeQutis
+recorded: "2026-11-08"
+canonical_github: "https://github.com/Darkpecas/lequtis-os"
+
+principals:
+  - id: alan_operator
+    kind: human_owner
+    status: declared
+  - id: cursor_cloud_agent
+    kind: builder_worker
+    status: observed
+    notes: "Can read lequtis-os; push denied (403). Drive MCP needsAuth this session."
+
+stores:
+  - id: github_lequtis_os
+    status: readable_public
+    write: denied_to_this_agent
+  - id: google_docs
+    status: blocked_this_session
+  - id: google_drive
+    status: blocked_this_session
+  - id: icloud
+    status: declared_no_mount
+  - id: chatgpt
+    status: declared_export_only
+  - id: gemini
+    status: declared_export_only
+  - id: notebook_lm
+    status: declared_export_only
+  - id: obsidian
+    status: declared_awaiting_vault_path
+  - id: personal_graph_sops
+    status: declared_via_obsidian_or_docs
+  - id: workspace_evidence_pack
+    status: indexed_local
+    path: docs/evidence/
+
+routes:
+  - id: local_kernel_loop
+    status: verified_disposable_tests
+    evidence: "tests/autonomous_loop_test.py A–F PASS"
+  - id: hermes_stdio_connector
+    status: verified_disposable_local
+    evidence: "runtime/hermes-stdio-connector reconstructed; test_bridge + test_host_preflight PASS; hermes_query disabled by default"
+  - id: hermes_hostinger
+    status: not_tested
+    evidence: "No authenticated Hostinger/Hermes tool in this session"
+  - id: chatgpt_to_hermes_bridge
+    status: disposable_contract_ready
+    evidence: "runtime/chatgpt_hermes_route disposable authorize+probe PASS; live needs tunnel env"
+  - id: cognitive_workers
+    status: verified_disposable
+    evidence: "core/workers.py deterministic|script|openai; THINK/CHOOSE only; ACT registry unchanged"
+  - id: independent_verifier
+    status: verified_disposable
+    evidence: "core/verifier.py + verify-independent CLI; rejects self-report alone"
+  - id: skills_lifecycle
+    status: verified_disposable
+    evidence: "core/skills.py PROPOSED→SANDBOXED→ENABLED→RETIRED"
