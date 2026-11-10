@@ -120,6 +120,20 @@ class CanonicalWriteTests(unittest.TestCase):
             self.C.write_intake("alan", self.req)
         self.assertEqual(before, self.counts())
 
+    def test_symlinked_canonical_database_rejected_without_mutation(self):
+        original = self.L.DB
+        before = self.counts()
+        with tempfile.TemporaryDirectory(prefix="lequtis-intake-symlink-") as scratch:
+            redirected = Path(scratch) / "lequtis.db"
+            redirected.symlink_to(original)
+            self.L.DB = redirected
+            try:
+                with self.assertRaisesRegex(ValueError, "canonical_database_symlink_rejected"):
+                    self.C.write_intake("alan", self.req)
+            finally:
+                self.L.DB = original
+        self.assertEqual(before, self.counts())
+
     def test_tampered_event_and_memory_refused(self):
         result = self.C.write_intake("alan", self.req)
         with self.L.connect() as db:
