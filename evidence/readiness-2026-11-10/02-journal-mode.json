@@ -1,0 +1,7 @@
+{
+  "canonical_repo_database_touched": false,
+  "db_parent_is_temp": true,
+  "evidence_label": "LOCAL PROOF, NOT LIVE VPS VERIFIED",
+  "journal_mode": "wal",
+  "wal_sidecar_exists_after_init": true
+}

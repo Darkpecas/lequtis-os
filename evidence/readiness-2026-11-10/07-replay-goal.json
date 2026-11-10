@@ -1,0 +1,14 @@
+{
+  "argv": [
+    "python3",
+    "core/lequtis.py",
+    "goal",
+    "--key",
+    "readiness-2026-11-10",
+    "remember: disposable readiness ledger fact"
+  ],
+  "evidence_label": "LOCAL PROOF, NOT LIVE VPS VERIFIED",
+  "returncode": 0,
+  "stderr": "",
+  "stdout": "AGENDA ITEM EXISTS\n"
+}

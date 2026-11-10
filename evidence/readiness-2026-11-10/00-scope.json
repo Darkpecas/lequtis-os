@@ -1,0 +1,14 @@
+{
+  "canonical_files_before": [
+    "database/schema.sql"
+  ],
+  "disposable_db": "temporary directory under /tmp; the database was deleted with that directory",
+  "evidence_label": "LOCAL PROOF, NOT LIVE VPS VERIFIED",
+  "goal_title": "remember: disposable readiness ledger fact",
+  "head": "425a2f32f3ddf762f6371e8508f8a78e290d4663",
+  "idempotency_key": "readiness-2026-11-10",
+  "kernel_matches_head_bytes": true,
+  "kernel_sha256": "fdbdc8b9c1b5446b5b94dce43eab0898cf2df47a03e1a299de14fd2ea9eab95c",
+  "scope": "LOCAL PROOF, NOT LIVE VPS VERIFIED",
+  "worker": "deterministic"
+}

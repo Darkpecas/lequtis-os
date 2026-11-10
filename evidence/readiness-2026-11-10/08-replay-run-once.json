@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "python3",
+    "core/lequtis.py",
+    "run-once"
+  ],
+  "evidence_label": "LOCAL PROOF, NOT LIVE VPS VERIFIED",
+  "returncode": 0,
+  "stderr": "",
+  "stdout": "{\n  \"status\": \"idle\",\n  \"evidence_label\": \"LOCAL PROOF, NOT LIVE VPS VERIFIED\"\n}\n"
+}

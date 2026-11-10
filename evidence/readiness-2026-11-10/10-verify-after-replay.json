@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "python3",
+    "core/lequtis.py",
+    "verify"
+  ],
+  "evidence_label": "LOCAL PROOF, NOT LIVE VPS VERIFIED",
+  "returncode": 0,
+  "stderr": "",
+  "stdout": "{\n  \"ok\": true,\n  \"count\": 20,\n  \"tip\": \"6520e1aecae6a20a3444f174293eb34e06986f98e69ce240b10f51b17ab320a1\"\n}\n"
+}

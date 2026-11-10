@@ -1,0 +1,29 @@
+{
+  "evidence_label": "LOCAL PROOF, NOT LIVE VPS VERIFIED",
+  "original_payload_changed": true,
+  "payload_after": "tampered",
+  "tampered_event_type": "agenda.created",
+  "tampered_seq": 1,
+  "verify_command": {
+    "argv": [
+      "python3",
+      "core/lequtis.py",
+      "verify"
+    ],
+    "evidence_label": "LOCAL PROOF, NOT LIVE VPS VERIFIED",
+    "returncode": 0,
+    "stderr": "",
+    "stdout": "{\n  \"ok\": false,\n  \"count\": 20,\n  \"broken_at\": 1,\n  \"reason\": \"event_hash_mismatch\"\n}\n"
+  },
+  "verify_events_command": {
+    "argv": [
+      "python3",
+      "core/lequtis.py",
+      "verify-events"
+    ],
+    "evidence_label": "LOCAL PROOF, NOT LIVE VPS VERIFIED",
+    "returncode": 1,
+    "stderr": "",
+    "stdout": "{\n  \"valid\": false,\n  \"events\": 20,\n  \"invalid_sequence\": 1,\n  \"evidence_label\": \"LOCAL PROOF, NOT LIVE VPS VERIFIED\"\n}\n"
+  }
+}
