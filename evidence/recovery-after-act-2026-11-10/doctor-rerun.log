@@ -1,0 +1,116 @@
+=== LEQUTIS DOCTOR ===
+{
+  "identity": {
+    "name": "LeQutis",
+    "purpose": "Proactive autonomous self-improving AI partner",
+    "host": "Android A71 / Termux",
+    "architecture": "evolutionary",
+    "github": "https://github.com/Darkpecas/lequtis-os",
+    "sovereignty": "Nothing is more senior than LeQutis. External AI, models, frameworks and plugins are subordinate resources only.",
+    "milestone": "living-kernel-autonomous-loop",
+    "schema_revision": "lequtis-os-kernel-4",
+    "evidence_label": "LOCAL PROOF, NOT LIVE VPS VERIFIED",
+    "knowledge_map": "Body of work: GitHub lequtis-os, Google Docs/Drive, iCloud, ChatGPT, Gemini, NotebookLM, Obsidian, personal graph SOPs."
+  },
+  "memory": 0,
+  "open_agenda": 0,
+  "skills": 0,
+  "events": 0,
+  "open_tasks": 0,
+  "unfinished_executions": 0,
+  "db": "/workspace/scratch/debc2202db4c/lequtis-recovery-29/.lequtis-doctor.6zgsqV/lequtis.db",
+  "event_chain": {
+    "ok": true,
+    "count": 0,
+    "tip": "GENESIS"
+  }
+}
+
+Database:
+-rw-r--r-- 1 agent agent 136K Nov 10 17:42 /workspace/scratch/debc2202db4c/lequtis-recovery-29/.lequtis-doctor.6zgsqV/lequtis.db
+
+Integrity smoke test:
+{
+  "ok": true,
+  "count": 1,
+  "tip": "05104bcf7ccb9a9de1b7929d9e505bb1dd79afe98930153fa85afdc05dae0ade"
+}
+{
+  "ok": true,
+  "issues": [],
+  "counts": {
+    "stores": 10,
+    "routes": 7,
+    "principals": 2,
+    "sources": 9,
+    "gates": 12,
+    "matrix_rows": 9
+  },
+  "gate_ids": [
+    "G01_recover_stdio_connector",
+    "G02_chatgpt_hermes_route",
+    "G03_hermes_probe_receipt",
+    "G04_canonical_state_read",
+    "G05_persist_intent_ids",
+    "G06_hermes_harmless_task",
+    "G07_independent_verifier",
+    "G08_canonical_observe_eval",
+    "G09_idempotent_replay",
+    "G10_fresh_session_continuity",
+    "G11_access_manifest_parity",
+    "G12_tbq_doc_signoff"
+  ],
+  "route_ids": [
+    "chatgpt_to_hermes_bridge",
+    "cognitive_workers",
+    "hermes_hostinger",
+    "hermes_stdio_connector",
+    "independent_verifier",
+    "local_kernel_loop",
+    "skills_lifecycle"
+  ],
+  "store_ids": [
+    "chatgpt",
+    "gemini",
+    "github_lequtis_os",
+    "google_docs",
+    "google_drive",
+    "icloud",
+    "notebook_lm",
+    "obsidian",
+    "personal_graph_sops",
+    "workspace_evidence_pack"
+  ]
+}
+
+Disposable autonomous loop suite:
+TEST A: happy path autonomous loop
+  PASS
+TEST B: failure capture and recoverable agenda
+  PASS
+TEST C: restart persistence and idempotent replay
+  PASS
+TEST D: cryptographic event chain integrity
+  PASS
+TEST CLI: disposable subprocess loop
+  PASS
+TEST E: knowledge source registry + local assimilate
+  PASS
+TEST F: inbox ingest + LIVE LOOP gate seeding
+  PASS
+
+=== LEQUTIS AUTONOMOUS LOOP TESTS: ALL PASS ===
+TEST SKILLS: evidence-gated sandbox → admission → retire
+  PASS
+TEST SKILLS CLI: accepts structured promotion evidence
+  PASS
+TEST VERIFIER: rejects self-report; requires artifacts
+  PASS
+TEST PARITY: ACCESS/SOURCES/gates IDs consistent
+  PASS
+TEST SEARCH: knowledge + memory substring
+  PASS
+TEST SCHEMA: schema.sql matches init() tables/columns
+  PASS
+ALL PASS: skill receipts + verifier + parity + search + schema
+PASS: LeQutis kernel executable + autonomous loop verified.

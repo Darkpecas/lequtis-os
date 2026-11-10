@@ -1,0 +1,24 @@
+TEST SKILLS: evidence-gated sandbox → admission → retire
+  PASS
+TEST SKILLS CLI: accepts structured promotion evidence
+Traceback (most recent call last):
+  File "/workspace/scratch/debc2202db4c/lequtis-recovery-29/tests/test_skills_verifier_parity.py", line 305, in <module>
+    main()
+  File "/workspace/scratch/debc2202db4c/lequtis-recovery-29/tests/test_skills_verifier_parity.py", line 294, in main
+    test_skill_cli_receipt(tmp / "skill-cli")
+  File "/workspace/scratch/debc2202db4c/lequtis-recovery-29/tests/test_skills_verifier_parity.py", line 216, in test_skill_cli_receipt
+    assert proc.returncode == 0, proc.stderr
+           ^^^^^^^^^^^^^^^^^^^^
+AssertionError: Traceback (most recent call last):
+  File "/workspace/scratch/debc2202db4c/lequtis-recovery-29/core/lequtis.py", line 3073, in <module>
+    main()
+  File "/workspace/scratch/debc2202db4c/lequtis-recovery-29/core/lequtis.py", line 3062, in main
+    skill_advance(argv[3], argv[4], evidence), indent=2
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/debc2202db4c/lequtis-recovery-29/core/lequtis.py", line 1686, in skill_advance
+    return advance_skill(
+           ^^^^^^^^^^^^^^
+  File "/workspace/scratch/debc2202db4c/lequtis-recovery-29/core/skills.py", line 144, in advance_skill
+    raise KeyError(f"skill not found: {skill_id}")
+KeyError: 'skill not found: a84e92cd-9a00-4126-8650-88a6c5aa4bbf'
+

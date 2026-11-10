@@ -60,3 +60,21 @@ routes:
   - id: skills_lifecycle
     status: verified_disposable
     evidence: "core/skills.py PROPOSED→SANDBOXED→ENABLED→RETIRED"
+
+# Current-session continuation; historical observations above are retained.
+continuation_2026_11_10:
+  principal: codex_work_mode
+  github_login: Darkpecas
+  github_user_id: 44348609
+  github_repository_id: 1337559246
+  routes:
+    - id: github_recovery_publication
+      status: verified_write_and_readback
+      evidence: "fix/recovery-after-act feb369cedd8ad4cdd767c48d41e7024d7f9aec60; tree matched tested local tree"
+    - id: integrated_recovery_local
+      status: verified_disposable_tests
+      evidence: "evidence/recovery-integration-2026-11-10/tests.log; 47 unittest tests passed"
+    - id: hermes_hostinger
+      status: blocked_no_callable_route
+      evidence: "No Hostinger/Hermes tool exposed; codex mcp get hostinger reports no server; no configured route variable names; Hostinger browser guidance restricts cloud sign-in"
+  canonical_sql: NOT_ACCESSED

@@ -1,0 +1,14 @@
+TEST BRIDGE: initialize + tools/list
+  PASS
+TEST BRIDGE: legacy version negotiation refuses false modern claim
+  PASS
+TEST BRIDGE: status + valid chain
+  PASS
+TEST BRIDGE: query disabled + no synthetic live proof
+  PASS
+TEST BRIDGE: tools/call MCP response shape
+  PASS
+TEST BRIDGE: newline-delimited JSON over subprocess streams
+  PASS
+
+=== LEQUTIS STDIO BRIDGE TESTS: ALL PASS ===

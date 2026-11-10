@@ -1,0 +1,66 @@
+{
+  "run_id": "fc2bcd52-a2e6-49d9-8011-f9f2b7539823",
+  "correlation_id": "d6c54619-477c-4ff6-a63b-f3ad5abb18b3",
+  "status": "completed",
+  "evidence": {
+    "correlation_id": "d6c54619-477c-4ff6-a63b-f3ad5abb18b3",
+    "phases": {
+      "NOTICE": {
+        "goals": 1,
+        "unfinished": 0
+      },
+      "THINK": {
+        "candidates": 1
+      },
+      "CHOOSE": {
+        "action": "store_note",
+        "kind": "goal"
+      },
+      "ACT": {
+        "task_id": "160279b1-23f6-41e5-9ba5-da3c5ae690ab",
+        "ok": true,
+        "duplicate": false
+      },
+      "OBSERVE": {
+        "task_id": "160279b1-23f6-41e5-9ba5-da3c5ae690ab",
+        "ok": true,
+        "duplicate": false,
+        "error": null,
+        "data": {
+          "memory_id": "8ed27f3a-e822-592f-b885-4a7293d2f7f1",
+          "note": "Loop progress on: Remember a smoke-test note through the autonomous loop."
+        },
+        "agenda_id": "3326e9e3-b29e-41e3-a006-8808be4c20ae"
+      },
+      "EVALUATE": {
+        "verdict": "success",
+        "accepted": true
+      },
+      "LEARN": {
+        "kind": "learning.success",
+        "lesson": "Action succeeded for task 160279b1-23f6-41e5-9ba5-da3c5ae690ab; evidence recorded in event chain.",
+        "task_id": "160279b1-23f6-41e5-9ba5-da3c5ae690ab"
+      },
+      "REMEMBER": {
+        "memory_id": "b9f38c8b-555e-42bf-83a2-2f7d814d7d49"
+      },
+      "UPDATE_AGENDA": {
+        "agenda_id": "3326e9e3-b29e-41e3-a006-8808be4c20ae",
+        "changed": true,
+        "status": "done"
+      }
+    }
+  },
+  "event_chain": {
+    "ok": true,
+    "count": 52,
+    "tip": "6559591e2fea6b5778757eb97ac347be54577c4e12c8034a4ddd51006fa81230"
+  }
+}
+{
+  "ok": true,
+  "count": 52,
+  "tip": "6559591e2fea6b5778757eb97ac347be54577c4e12c8034a4ddd51006fa81230"
+}
+
+=== LEQUTIS SMOKE TEST: PASS ===
