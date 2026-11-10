@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import uuid
@@ -58,9 +59,14 @@ def _validate(request: Any) -> dict[str, Any]:
 
 
 def _open() -> sqlite3.Connection:
-    # mode=rw refuses to create an alternative empty database.
-    if L.DB.is_symlink():
+    # Writes need an operator-chosen destination; the repository default
+    # state directory is never used implicitly for canonical intake.
+    if not (os.environ.get("LEQUTIS_DB") or os.environ.get("LEQUTIS_STATE")):
+        raise ValueError("explicit_state_required")
+    # Neither the database file nor its state directory may redirect elsewhere.
+    if L.DB.is_symlink() or L.DB.parent.is_symlink():
         raise ValueError("canonical_database_symlink_rejected")
+    # mode=rw refuses to create an alternative empty database.
     db = sqlite3.connect(L.DB.resolve().as_uri() + "?mode=rw", uri=True, timeout=10)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA foreign_keys=ON")

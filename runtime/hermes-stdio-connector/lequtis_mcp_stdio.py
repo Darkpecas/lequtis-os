@@ -59,6 +59,10 @@ def tool_canonical_intake(arguments: Any, *, read_only: bool = False) -> dict[st
     principal = _write_principal()
     if principal is None:
         return {"ok": False, "live_host": False, "reason": "canonical_write_disabled"}
+    # The host must attest that this stdio process is reachable only over a
+    # trusted local transport before any canonical intake or read is served.
+    if os.environ.get("LEQUTIS_TRUSTED_LOCAL_TRANSPORT") != "1":
+        return {"ok": False, "live_host": False, "reason": "trusted_transport_not_attested"}
     try:
         import canonical_write as C
         if read_only:

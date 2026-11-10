@@ -28,15 +28,19 @@ linked agenda, while `run_once` supports a different `remember` execution path.
 The intake gate deliberately grants neither execution mode approval.
 
 `lequtis_canonical_write` and `lequtis_canonical_read` are absent by default.
-The trusted stdio host must set both `LEQUTIS_CANONICAL_WRITE=1` and a validated
-`LEQUTIS_WRITE_PRINCIPAL` before starting the adapter. This principal is the
+The trusted stdio host must set `LEQUTIS_CANONICAL_WRITE=1`, a validated
+`LEQUTIS_WRITE_PRINCIPAL` and `LEQUTIS_TRUSTED_LOCAL_TRANSPORT=1` (its
+attestation that the process is reachable only over a trusted local transport)
+before starting the adapter; without the attestation both tools refuse with
+`trusted_transport_not_attested`. This principal is the
 host-authenticated caller binding, not a request parameter. Only bind one
 principal per stdio process; do not expose the process to untrusted clients.
 No web/HTTP authentication, transport, host deployment or live route is added.
 
 The write gate opens only the existing kernel database selected by `LEQUTIS_DB`
-or `$LEQUTIS_STATE/lequtis.db`, using SQLite `mode=rw`. It refuses missing,
-symlinked, non-WAL or incompatible database paths and never initializes or
+or `$LEQUTIS_STATE/lequtis.db`, using SQLite `mode=rw`; one of those variables
+must be set explicitly (`explicit_state_required`). It refuses missing,
+symlinked (database file or its state directory), non-WAL or incompatible database paths and never initializes or
 migrates one. The symlink check is performed before opening; concurrent path
 replacement is not covered by this guard.
 It validates fields and the existing event chain, then uses one

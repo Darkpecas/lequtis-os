@@ -24,6 +24,7 @@ class CanonicalWriteTests(unittest.TestCase):
         os.environ.pop("LEQUTIS_DB", None)
         os.environ.pop("LEQUTIS_CANONICAL_WRITE", None)
         os.environ.pop("LEQUTIS_WRITE_PRINCIPAL", None)
+        os.environ.pop("LEQUTIS_TRUSTED_LOCAL_TRANSPORT", None)
         import lequtis
         self.L = importlib.reload(lequtis)
         self.L.init()
@@ -134,6 +135,72 @@ class CanonicalWriteTests(unittest.TestCase):
                 self.L.DB = original
         self.assertEqual(before, self.counts())
 
+    # Hardening ported from PR #22 (adversarial canonical-write tests).
+    def test_untrusted_transport_changes_nothing(self):
+        before = self.counts()
+        os.environ["LEQUTIS_CANONICAL_WRITE"] = "1"
+        os.environ["LEQUTIS_WRITE_PRINCIPAL"] = "alan"
+        for value in (None, "0", "yes"):
+            if value is None:
+                os.environ.pop("LEQUTIS_TRUSTED_LOCAL_TRANSPORT", None)
+            else:
+                os.environ["LEQUTIS_TRUSTED_LOCAL_TRANSPORT"] = value
+            result = self.A.tool_canonical_intake(self.req)
+            self.assertFalse(result["ok"], result)
+            self.assertEqual("trusted_transport_not_attested", result["reason"])
+            read = self.A.tool_canonical_intake({"idempotency_key": "ios-001"}, read_only=True)
+            self.assertEqual("trusted_transport_not_attested", read["reason"])
+        self.assertEqual(before, self.counts())
+
+    def test_trusted_transport_allows_intake(self):
+        os.environ["LEQUTIS_CANONICAL_WRITE"] = "1"
+        os.environ["LEQUTIS_WRITE_PRINCIPAL"] = "alan"
+        os.environ["LEQUTIS_TRUSTED_LOCAL_TRANSPORT"] = "1"
+        result = self.A.tool_canonical_intake(self.req)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual("created", result["status"])
+
+    def test_missing_explicit_state_refuses_write(self):
+        before = self.counts()
+        previous = os.environ.pop("LEQUTIS_STATE")
+        try:
+            with self.assertRaisesRegex(ValueError, "explicit_state_required"):
+                self.C.write_intake("alan", self.req)
+            with self.assertRaisesRegex(ValueError, "explicit_state_required"):
+                self.C.read_intake("alan", "ios-001")
+        finally:
+            os.environ["LEQUTIS_STATE"] = previous
+        self.assertEqual(before, self.counts())
+
+    def test_symlinked_state_directory_rejected_without_mutation(self):
+        original = self.L.DB
+        before = self.counts()
+        with tempfile.TemporaryDirectory(prefix="lequtis-intake-dirlink-") as scratch:
+            linked_dir = Path(scratch) / "state"
+            linked_dir.symlink_to(original.parent, target_is_directory=True)
+            self.L.DB = linked_dir / original.name
+            try:
+                with self.assertRaisesRegex(ValueError, "canonical_database_symlink_rejected"):
+                    self.C.write_intake("alan", self.req)
+                with self.assertRaisesRegex(ValueError, "canonical_database_symlink_rejected"):
+                    self.C.read_intake("alan", "ios-001")
+            finally:
+                self.L.DB = original
+        self.assertEqual(before, self.counts())
+
+    def test_symlinked_database_read_rejected(self):
+        self.C.write_intake("alan", self.req)
+        original = self.L.DB
+        with tempfile.TemporaryDirectory(prefix="lequtis-intake-readlink-") as scratch:
+            redirected = Path(scratch) / "lequtis.db"
+            redirected.symlink_to(original)
+            self.L.DB = redirected
+            try:
+                with self.assertRaisesRegex(ValueError, "canonical_database_symlink_rejected"):
+                    self.C.read_intake("alan", "ios-001")
+            finally:
+                self.L.DB = original
+
     def test_tampered_event_and_memory_refused(self):
         result = self.C.write_intake("alan", self.req)
         with self.L.connect() as db:
@@ -141,12 +208,16 @@ class CanonicalWriteTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "binding_mismatch"):
             self.C.read_intake("alan", "ios-001")
         with self.L.connect() as db:
+            # No-op today; keeps raw-file tampering possible once the
+            # append-only events trigger lands.
+            db.execute("DROP TRIGGER IF EXISTS events_append_only_no_update")
             db.execute("UPDATE events SET payload='{}' WHERE event_id=?", (result["event"]["event_id"],))
         with self.assertRaisesRegex(ValueError, "event_chain_invalid"):
             self.C.write_intake("alan", {**self.req, "idempotency_key": "next"})
 
     def test_enabled_mcp_wire_path(self):
-        env = {**os.environ, "LEQUTIS_CANONICAL_WRITE": "1", "LEQUTIS_WRITE_PRINCIPAL": "alan"}
+        env = {**os.environ, "LEQUTIS_CANONICAL_WRITE": "1", "LEQUTIS_WRITE_PRINCIPAL": "alan",
+               "LEQUTIS_TRUSTED_LOCAL_TRANSPORT": "1"}
         messages = [{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
             "name": "lequtis_canonical_write", "arguments": self.req}},
             {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
