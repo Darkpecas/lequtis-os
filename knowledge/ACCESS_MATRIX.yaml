@@ -39,19 +39,15 @@ matrix:
     resource: all_stores
     permission: owner
     evidence: "declared by Alan; not independently re-verified here"
-
-# Current session does not supersede another principal's historical permissions.
-continuation_2026_11_10:
-  principal: codex_work_mode
-  matrix:
-    - resource: github_recovery_publication
-      permission: allow
-      evidence: "Authenticated Darkpecas; branch publication and immutable commit tree read-back succeeded"
-    - resource: integrated_recovery_local
-      permission: allow
-      evidence: "Disposable integrated source: 47 unittest tests passed; no canonical production DB accessed"
-    - resource: hermes_hostinger
-      permission: unknown
-      capability: blocked_no_callable_route
-      evidence: "No authenticated host execution action available in this session; browser sign-in restricted"
-  canonical_sql: NOT_ACCESSED
+  - principal: codex_work_mode
+    resource: github_recovery_publication
+    permission: allow
+    evidence: "2026-11-10 authenticated Darkpecas; branch publication and immutable tree read-back succeeded"
+  - principal: codex_work_mode
+    resource: integrated_recovery_local
+    permission: allow
+    evidence: "2026-11-10 disposable integrated source: 47 unittest tests passed; canonical SQL NOT_ACCESSED"
+  - principal: codex_work_mode
+    resource: hermes_hostinger
+    permission: unknown
+    evidence: "2026-11-10 blocked: no authenticated host execution action exposed; Hostinger cloud-browser sign-in restricted"

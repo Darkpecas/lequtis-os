@@ -36,3 +36,12 @@ release; run host tests on disposable state; perform an explicit compatible
 migration only with rollback ready; switch the intended service; correlate a
 safe Hermes request with independent durable read-back and replay test. Actual
 paths, service name and host configuration must come from that read-only probe.
+
+## CI correction
+
+Initial PR #32 CI runs 42911593778 and 42911593891 failed the parity check:
+`matrix_principal_unknown: codex_work_mode`. The first registry continuation
+used nested YAML not supported by the stdlib fallback parser in core/access_parity.py.
+The records were flattened to the existing principals/routes/matrix schema,
+without weakening the checker. Historical principal observations remain intact.
+This is a correction to the newly added access records, not a recovery-kernel failure.
