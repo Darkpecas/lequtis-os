@@ -59,6 +59,8 @@ def _validate(request: Any) -> dict[str, Any]:
 
 def _open() -> sqlite3.Connection:
     # mode=rw refuses to create an alternative empty database.
+    if L.DB.is_symlink():
+        raise ValueError("canonical_database_symlink_rejected")
     db = sqlite3.connect(L.DB.resolve().as_uri() + "?mode=rw", uri=True, timeout=10)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA foreign_keys=ON")
