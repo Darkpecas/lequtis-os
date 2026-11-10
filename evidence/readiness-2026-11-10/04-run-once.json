@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "python3",
+    "core/lequtis.py",
+    "run-once"
+  ],
+  "evidence_label": "LOCAL PROOF, NOT LIVE VPS VERIFIED",
+  "returncode": 0,
+  "stderr": "",
+  "stdout": "{\n  \"status\": \"succeeded\",\n  \"agenda_id\": \"a902d070-b946-4b3f-81f2-60d748cfecb6\",\n  \"result\": {\n    \"memory_id\": \"e1987468-d0fd-508a-acdb-024dc2b0318e\",\n    \"content\": \"disposable readiness ledger fact\",\n    \"correlation_id\": \"c258801d-9146-40d8-bbcd-a0e56c1d13b3\"\n  },\n  \"verifier\": {\n    \"artifact_path\": \"/tmp/lequtis-readiness-bzzjbgmx/artifacts/c258801d-9146-40d8-bbcd-a0e56c1d13b3.json\",\n    \"content_sha256\": \"23aac46a1a58111c712d6f8de00bf2d85a36a4cd242c2f29133bd06fcc34b8e3\",\n    \"correlation_id\": \"c258801d-9146-40d8-bbcd-a0e56c1d13b3\",\n    \"evidence_label\": \"LOCAL PROOF, NOT LIVE VPS VERIFIED\",\n    \"execution_id\": \"898fd99d-ce16-474f-8d37-62bc5c41fd97\",\n    \"observation_id\": \"837c7db7-ef16-41c8-857a-bd8b897b9158\",\n    \"reason\": \"ok\",\n    \"verdict\": \"accepted\",\n    \"verifier_pid\": 2766,\n    \"worker_self_report_consulted\": false\n  },\n  \"evidence_label\": \"LOCAL PROOF, NOT LIVE VPS VERIFIED\"\n}\n"
+}

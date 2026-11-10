@@ -1,0 +1,122 @@
+{
+  "schema": "lequtis-routing-contract-v1",
+  "evidence_label": "LOCAL PROOF, NOT LIVE VPS VERIFIED",
+  "recorded": "2026-11-10",
+  "status": "proposal",
+  "rule": "Each named model had a public page fetched on 2026-11-10 and is recorded VERIFIED. This file does not invoke a model, open a network route, or replace core/workers.py. The exact repository id meta-models/Muse-Spark-Open-816B is omitted because that URL returned HTTP 401 and was not confirmed.",
+  "tiers": [
+    {
+      "id": "tier0",
+      "role": "decision gate",
+      "models": [
+        {
+          "name": "d1-ultra",
+          "provider": "Liquid AI",
+          "availability": "VERIFIED",
+          "access": "hosted API documented by Liquid AI; this contract does not require local weights",
+          "sources": [
+            "https://www.liquid.ai/blog/d1-ultra",
+            "https://docs.liquid.ai/lfm/models/d1"
+          ]
+        }
+      ],
+      "input_contract": {
+        "summary": "One bounded decision question of a type the vendor documents (noul, choice, or score), plus a kernel state excerpt already stored by LeQutis. No tool execution and no free-form shell.",
+        "fields": ["question_type", "question", "state_excerpt"]
+      },
+      "output_contract": {
+        "summary": "A labeled decision and probability, retained as an unverified proposal. It does not update agenda, events, or memory by itself.",
+        "fields": ["label", "probability", "proposal_status"]
+      },
+      "fallback": "core/workers.py deterministic_select. No model call.",
+      "verifier_requirement": "core/verifier_main.py must accept an allowlisted artifact before the kernel records success. The model response is not a verdict."
+    },
+    {
+      "id": "tier1",
+      "role": "edge proposal for THINK and CHOOSE",
+      "models": [
+        {
+          "name": "LiquidAI/LFM3-1.7B",
+          "provider": "Liquid AI",
+          "availability": "VERIFIED",
+          "published_context": "256K tokens (input + output), as stated on the model card. The same card's evaluation note says 262144 tokens.",
+          "sources": [
+            "https://huggingface.co/LiquidAI/LFM3-1.7B",
+            "https://docs.liquid.ai/lfm/models/lfm3-1.7b"
+          ]
+        },
+        {
+          "name": "LiquidAI/LFM2.5-2.6B",
+          "provider": "Liquid AI",
+          "availability": "VERIFIED",
+          "published_context": "131072 tokens on the model card. The card does not state a 256K window. Vendor deprecation page lists this checkpoint as deprecated in favor of LFM3-1.7B.",
+          "sources": [
+            "https://huggingface.co/LiquidAI/LFM2.5-2.6B",
+            "https://docs.liquid.ai/lfm/help/deprecations"
+          ]
+        }
+      ],
+      "input_contract": {
+        "summary": "The noticed open goals and unfinished tasks already produced by the kernel. Context stays inside the published window of the model that is actually called. This repository does not call either model.",
+        "fields": ["open_goals", "unfinished_tasks"]
+      },
+      "output_contract": {
+        "summary": "A candidate list. Candidates outside the kernel safe action and kind sets are dropped by sanitize_proposals. ACT stays the registered action set.",
+        "fields": ["kind", "action", "idempotency_key", "payload"]
+      },
+      "fallback": "core/workers.py deterministic_propose and deterministic_select.",
+      "verifier_requirement": "Unsafe proposals never reach ACT. Success still requires the independent verifier on the kernel artifact."
+    },
+    {
+      "id": "tier2",
+      "role": "agentic executor proposal",
+      "models": [
+        {
+          "name": "meta-models/Muse-Glimmer-30B",
+          "provider": "Meta",
+          "availability": "VERIFIED",
+          "published_context": "131072+ tokens, as stated on the model card.",
+          "sources": [
+            "https://huggingface.co/meta-models/Muse-Glimmer-30B"
+          ]
+        }
+      ],
+      "input_contract": {
+        "summary": "One allowlisted kernel action and its payload. The model does not receive a database path and does not open SQLite.",
+        "fields": ["action", "payload", "correlation_id"]
+      },
+      "output_contract": {
+        "summary": "A proposed artifact body. The kernel writes it with the existing no-follow, exclusive-create path. The model does not set the verdict.",
+        "fields": ["content", "correlation_id"]
+      },
+      "fallback": "The current kernel run-once path, which executes the allowlisted remember action without a model.",
+      "verifier_requirement": "A separate verifier process checks the allowlisted path, content hash, correlation id, and evidence label, and rejects a symlink."
+    },
+    {
+      "id": "tier3",
+      "role": "deep synthesis and held-out verification proposal",
+      "models": [
+        {
+          "name": "meta-models/Muse-Spark-Open-816B-A42B",
+          "provider": "Meta",
+          "availability": "VERIFIED",
+          "access": "Public Hugging Face model id, gated manual. The unsuffixed id Muse-Spark-Open-816B is not listed here.",
+          "sources": [
+            "https://huggingface.co/meta-models/Muse-Spark-Open-816B-A42B",
+            "https://huggingface.co/api/models/meta-models/Muse-Spark-Open-816B-A42B"
+          ]
+        }
+      ],
+      "input_contract": {
+        "summary": "A claim packet whose source hashes were computed by the kernel before the proposal. The packet does not include a hidden answer key, because no held-out key store exists in this repository.",
+        "fields": ["claims", "source_hashes"]
+      },
+      "output_contract": {
+        "summary": "Synthesis text that cites the supplied source hashes, stored as an unverified proposal. A missing grade stays unverified.",
+        "fields": ["synthesis", "cited_hashes", "proposal_status"]
+      },
+      "fallback": "Leave the claim unverified. Do not invent a grade.",
+      "verifier_requirement": "Kernel acceptance remains core/verifier_main.py. A model grade is not acceptance. This contract does not add a rubric that the repository does not contain."
+    }
+  ]
+}

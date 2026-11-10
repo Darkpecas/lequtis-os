@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "python3",
+    "core/lequtis.py",
+    "init"
+  ],
+  "evidence_label": "LOCAL PROOF, NOT LIVE VPS VERIFIED",
+  "returncode": 0,
+  "stderr": "",
+  "stdout": "{\n  \"identity\": {\n    \"name\": \"LeQutis\",\n    \"purpose\": \"Proactive autonomous self-improving AI partner\",\n    \"host\": \"Android A71 / Termux\",\n    \"architecture\": \"evolutionary\",\n    \"github\": \"https://github.com/Darkpecas/lequtis-os\",\n    \"sovereignty\": \"Nothing is more senior than LeQutis. External AI, models, frameworks and plugins are subordinate resources only.\",\n    \"milestone\": \"living-kernel-autonomous-loop\",\n    \"schema_revision\": \"lequtis-os-kernel-3\",\n    \"evidence_label\": \"LOCAL PROOF, NOT LIVE VPS VERIFIED\",\n    \"knowledge_map\": \"Body of work: GitHub lequtis-os, Google Docs/Drive, iCloud, ChatGPT, Gemini, NotebookLM, Obsidian, personal graph SOPs.\"\n  },\n  \"memory\": 0,\n  \"open_agenda\": 0,\n  \"skills\": 0,\n  \"events\": 0,\n  \"open_tasks\": 0,\n  \"unfinished_executions\": 0,\n  \"db\": \"/tmp/lequtis-readiness-bzzjbgmx/lequtis.db\",\n  \"event_chain\": {\n    \"ok\": true,\n    \"count\": 0,\n    \"tip\": \"GENESIS\"\n  }\n}\n"
+}
