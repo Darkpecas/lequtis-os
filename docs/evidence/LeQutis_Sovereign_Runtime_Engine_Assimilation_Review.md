@@ -8,7 +8,7 @@
 
 ## Evidence boundary
 
-The attached 197-line Python file was read and parsed with Python's AST parser (`AST_PARSE_PASS`). It was not imported or executed; its entry point creates a SQLite database, enables WAL, and writes a JSONL file. No live LeQutis database, Termux checkout, or Hostinger Hermes service was accessed. The canonical repository files were inspected through GitHub at the baseline commit above. The repository's existing acceptance record is documentation, not a test run from this review.
+The attached 197-line Python file was read and parsed with Python's AST parser (`AST_PARSE_PASS`). It was not imported or executed; its entry point creates a SQLite database, enables WAL, and writes a JSONL file. No live LeQutis database, Termux checkout, or Hostinger Hermes service was accessed. The canonical repository files were inspected through GitHub at the baseline commit above. The repository's existing acceptance record is documentation; the PR workflow result is recorded separately in GitHub.
 
 ## Comparison with the canonical runtime
 
@@ -19,13 +19,9 @@ The candidate instead creates a parallel `LeQutisEventStore` schema and a second
 ## Findings
 
 1. **The claimed adversarial consensus is not implemented.** The docstring promises a Jaccard overlap threshold of 0.60, but the function computes no overlap. Approval only requires zero truthy `contradiction_detected` flags and at least one item in `evidence_hashes`; it does not validate hashes, provenance, independent swarm roles, or a quorum. A single proposal with an arbitrary non-empty evidence string can pass.
-
 2. **The event hash omits fields the verifier reads as metadata.** The hash covers serialized event data, previous hash, version and timestamp, but excludes event type, aggregate ID, agent ID and event ID. Altering those excluded columns would not be detected by `verify_integrity`.
-
 3. **The two persistence writes can diverge.** The SQLite insert and JSONL append are separate storage operations without an outbox/reconciliation protocol. A partial file write or database commit failure can leave only one side recorded.
-
 4. **The state projection is unfinished.** `AgentMemoryState` is created but never populated or queried. The candidate has no loop transitions, replay/recovery behavior, idempotency contract, or independent verifier integration.
-
 5. **Reuse provenance is incomplete.** No licence declaration or upstream provenance accompanies the attachment. This review records findings and principles in original prose and does not copy executable source into LeQutis.
 
 ## Assimilation decision
@@ -33,6 +29,6 @@ The candidate instead creates a parallel `LeQutisEventStore` schema and a second
 - **Reject** adding these classes, tables, or JSONL ledger to the sovereign runtime.
 - **Harvest** the general requirement that any future consensus decision be tied to inspectable, claim-level evidence and verified independently. LeQutis already has the canonical event chain and candidate-bound skill admission path to host such work.
 - **Do not adopt** the S5 threshold or its approval result. If consensus becomes a real requirement, specify the proposal schema, evidence provenance, role/quorum rules and contradiction semantics first, then implement against the canonical ledger with adversarial tests.
-- **Preserve** this review as an evidence-pack record. The documented `python3 core/lequtis.py assimilate` command can index Markdown under `docs/evidence/` into the selected local runtime state; that command was not run here, so no runtime memory update is claimed.
+- **Preserve and index** this review through the existing `python3 core/lequtis.py assimilate` evidence-pack route. On 2026-11-10, that command was run against the merged repository snapshot with isolated `LEQUTIS_ROOT` and `LEQUTIS_STATE`. It returned `ok=true`, `indexed=1`, `remembered=1`; independent read-only database checks matched the review content hash, found the memory excerpt, and recomputed the event chain successfully across four events. This was disposable-state verification only; no user or live runtime database was accessed.
 
 This is a selective research/evidence assimilation, not a runtime integration or live-loop acceptance.
