@@ -14,6 +14,11 @@ principals:
     status: observed
     notes: "Can read lequtis-os; push denied (403). Drive MCP needsAuth this session."
 
+  - id: codex_work_mode
+    kind: builder_worker
+    status: observed_2026_11_10
+    notes: "Authenticated GitHub principal Darkpecas/44348609; published recovery branch and verified its exact tree. No canonical SQL accessed."
+
 stores:
   - id: github_lequtis_os
     status: readable_public
@@ -46,8 +51,9 @@ routes:
     status: verified_disposable_local
     evidence: "runtime/hermes-stdio-connector reconstructed; test_bridge + test_host_preflight PASS; hermes_query disabled by default"
   - id: hermes_hostinger
-    status: not_tested
-    evidence: "No authenticated Hostinger/Hermes tool in this session"
+    status: blocked_no_callable_route_2026_11_10
+    evidence: "No Hostinger/Hermes execution tool; no configured hostinger MCP server; no route variables; Hostinger restricts cloud-browser sign-in. Canonical SQL NOT_ACCESSED."
+    historical_evidence: "2026-11-08: not_tested; no authenticated Hostinger/Hermes tool in that session"
   - id: chatgpt_to_hermes_bridge
     status: disposable_contract_ready
     evidence: "runtime/chatgpt_hermes_route disposable authorize+probe PASS; live needs tunnel env"
@@ -60,3 +66,9 @@ routes:
   - id: skills_lifecycle
     status: verified_disposable
     evidence: "core/skills.py PROPOSED→SANDBOXED→ENABLED→RETIRED"
+  - id: github_recovery_publication
+    status: verified_write_and_readback_2026_11_10
+    evidence: "fix/recovery-after-act feb369cedd8ad4cdd767c48d41e7024d7f9aec60; tree matched tested local tree"
+  - id: integrated_recovery_local
+    status: verified_disposable_tests_2026_11_10
+    evidence: "evidence/recovery-integration-2026-11-10/tests.log; 47 unittest tests passed; no production DB accessed"

@@ -39,3 +39,15 @@ matrix:
     resource: all_stores
     permission: owner
     evidence: "declared by Alan; not independently re-verified here"
+  - principal: codex_work_mode
+    resource: github_recovery_publication
+    permission: allow
+    evidence: "2026-11-10 authenticated Darkpecas; branch publication and immutable tree read-back succeeded"
+  - principal: codex_work_mode
+    resource: integrated_recovery_local
+    permission: allow
+    evidence: "2026-11-10 disposable integrated source: 47 unittest tests passed; canonical SQL NOT_ACCESSED"
+  - principal: codex_work_mode
+    resource: hermes_hostinger
+    permission: unknown
+    evidence: "2026-11-10 blocked: no authenticated host execution action exposed; Hostinger cloud-browser sign-in restricted"

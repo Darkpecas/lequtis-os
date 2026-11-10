@@ -1,0 +1,20 @@
+[
+  {
+    "command": [
+      "python3",
+      "tests/test_skills_verifier_parity.py"
+    ],
+    "exit_code": 0,
+    "log": "skills-rerun.log",
+    "reason_for_rerun": "Initial runner set LEQUTIS_DB; scripts expect to choose their own disposable DB via LEQUTIS_STATE."
+  },
+  {
+    "command": [
+      "sh",
+      "doctor.sh"
+    ],
+    "exit_code": 0,
+    "log": "doctor-rerun.log",
+    "reason_for_rerun": "Initial runner set LEQUTIS_DB; scripts expect to choose their own disposable DB via LEQUTIS_STATE."
+  }
+]

@@ -1,0 +1,10 @@
+TEST PREFLIGHT: exit 3 when DB missing (stdio OK)
+  PASS
+TEST PREFLIGHT: exit 0 when core+DB OK (Hermes optional)
+  PASS
+TEST PREFLIGHT: exit 3 when Hermes required but missing
+  PASS
+TEST PREFLIGHT: nonexistent core cannot claim live
+  PASS
+
+=== LEQUTIS HOST PREFLIGHT TESTS: ALL PASS ===

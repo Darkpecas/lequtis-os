@@ -92,16 +92,19 @@ LEQUTIS_WORKER=openai LEQUTIS_WORKER_URL=https://api.openai.com/v1/chat/completi
 
 Unsafe proposals are rejected and fall back to deterministic policy.
 
-## Kernel hardening (lequtis-os-kernel-3)
+## Kernel hardening (lequtis-os-kernel-4)
 
 LOCAL PROOF, NOT LIVE VPS VERIFIED.
 
 These controls sit on the current kernel. Existing commands, `LEQUTIS_STATE`, and `LEQUTIS_ROOT` still work. `LEQUTIS_DB` selects the database file when it is set; otherwise the file remains `$LEQUTIS_STATE/lequtis.db`.
 
-- An existing database whose columns or `identity.schema_revision` are not `lequtis-os-kernel-3` fails closed. `status` and `init` exit 3 with `schema guard` and do not write.
+- An existing database whose columns or `identity.schema_revision` are not `lequtis-os-kernel-4` fails closed. `status` and `init` exit 3 with `schema guard` and do not write.
+- A `lequtis-os-kernel-3` database stays at that revision until `python3 core/lequtis.py migrate`. Migrate is explicit, idempotent when already current, and refused for any other shape. The migration and its `schema.migrated` event commit together.
 - `goal --key <key> <title>` replays the same title as one agenda row. The same key with a different title is a conflict.
+- `cancel --key <key> agenda <id>` or `cancel --key <key> execution <id>` records one hash-chained cancellation. The same key and request replays. A later result commit for a cancelled execution is rejected.
 - `run-once` writes one allowlisted artifact and asks `core/verifier_main.py`, a separate process, to check its path, hash, and correlation id. The verifier does not read the worker self-report. A rejected verdict leaves the agenda incomplete.
 - `recover` does not take a lease whose process is still alive. After that process is killed, `complete` with the old lease token cannot finish the agenda.
+- `verify` exits 1 when the event chain is invalid. `verify-events` still exits 1 in that case.
 
 `run.sh` calls `python core/lequtis.py daemon 900`. `daemon` repeats `run-once`.
 

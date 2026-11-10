@@ -1,0 +1,62 @@
+{
+  "algorithm": "sha256",
+  "evidence_label": "LOCAL PROOF, NOT LIVE VPS VERIFIED",
+  "files": [
+    {
+      "bytes": 5801,
+      "path": "core/access_parity.py",
+      "sha256": "f499751052d6436c10a796c30000277d76594dbcc69f379f16caf2db922c8d9e"
+    },
+    {
+      "bytes": 6086,
+      "path": "core/failed_hypotheses.py",
+      "sha256": "2ec45c7c32a5bb9e95eb9f0ffc17f65b7c21069b26970610c876592b0e99566e"
+    },
+    {
+      "bytes": 6777,
+      "path": "core/golden_master.py",
+      "sha256": "f6b9ddea2c3c579841428a0e6adbf96af6eafe6d76f11f9fc61b1c11a9e61632"
+    },
+    {
+      "bytes": 102910,
+      "path": "core/lequtis.py",
+      "sha256": "42edfb4a41cccc13b4beb86b1fd64bcee15a9539ac9c9212d8218428a941ba7f"
+    },
+    {
+      "bytes": 3773,
+      "path": "core/routing_contract.py",
+      "sha256": "7b1467cc6abb0c2e32ef428c7c671e0fb2c1915ac6bcd20cc28be226507adaf2"
+    },
+    {
+      "bytes": 8717,
+      "path": "core/skills.py",
+      "sha256": "7483855ef979edc75ead728620737c029744e57403efb4f0d6f92c3352a0d4db"
+    },
+    {
+      "bytes": 8495,
+      "path": "core/verifier.py",
+      "sha256": "4f1973c01b491d9ef697a8baa7a021885ada0cd5116b893f4d47b7f14efea9f5"
+    },
+    {
+      "bytes": 4858,
+      "path": "core/verifier_main.py",
+      "sha256": "4ac12cc51f21ab162e684f0e57fa6b1fdb80bfc0fa2f74fc852094c16d9c022f"
+    },
+    {
+      "bytes": 12074,
+      "path": "core/workers.py",
+      "sha256": "97551e3b3eaddcbb756b46efaaf485c59f39e425e57f4b0bd253aada9f0b3b7e"
+    },
+    {
+      "bytes": 3985,
+      "path": "database/schema.sql",
+      "sha256": "e833a897dab923ee9fe64a750d59c85825d46a360010a3f66eb50e96a410e74b"
+    }
+  ],
+  "kernel_paths": [
+    "core",
+    "database/schema.sql"
+  ],
+  "manifest_sha256": "6f13bed326da7465474625d5e6a07c2a686a25010c2fbf853522fede5aeffc42",
+  "schema": "lequtis-golden-master-v1"
+}
