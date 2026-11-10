@@ -11,7 +11,7 @@ VERIFIED means a file or a command run here showed it. UNVERIFIED means a public
 
 | Plane / rule | Implementing files | Evidence label | Gap |
 | --- | --- | --- | --- |
-| P0 hash-chained SQLite WAL ledger (`previous_hash`, `event_hash`) | `database/schema.sql`; `core/lequtis.py` (`event`, `verify_event_chain`, `PRAGMA journal_mode=WAL`); `evidence/readiness-2026-11-10/` | VERIFIED | The column is `previous_hash`, not `prev_hash`. Schema has no trigger that rejects UPDATE or DELETE. Disposable proof: `journal_mode=wal`, sidecar present after init, chain `ok: true` (20 events), then one payload update made `verify` return `ok: false`, `event_hash_mismatch` at seq 1. `verify` still exited 0. `verify-events` exited 1 with `valid: false`. |
+| P0 hash-chained SQLite WAL ledger (`previous_hash`, `event_hash`) | `database/schema.sql`; `core/lequtis.py` (`event`, `verify_event_chain`, `PRAGMA journal_mode=WAL`); `evidence/readiness-2026-11-10/` | VERIFIED | The column is `previous_hash`, not `prev_hash`. Schema has no trigger that rejects UPDATE or DELETE. Disposable proof: `journal_mode=wal`, sidecar present after init, chain `ok: true` (20 events), then one payload update made `verify` return `ok: false`, `event_hash_mismatch` at seq 1. That 2026-11-10 snapshot's `verify` process exited 0. Current `verify` exits 1 when the chain is invalid (`tests/test_execution.py`). `verify-events` exited 1 with `valid: false`. |
 | P1 immutable golden-master seal | `core/golden_master.py`; `GOLDEN_MASTER.json`; `tests/test_golden_master.py` | VERIFIED | Absent on the audited `main` commit before this branch. The seal is a SHA-256 manifest of git-tracked `core/` and `database/schema.sql` (10 files, `manifest_sha256` `21e2bfed433fea0d52e0b6d484b3f007cf53ce4025c3f651bbb78d1120d31717`). It refuses to overwrite an existing seal and verifies a clone path. It does not itself launch an experiment. |
 | P2 local memory storage | `database/schema.sql` `memory`; `core/lequtis.py` `remember` | VERIFIED | Rows are local SQLite. There is no mesh, activation score, or decay field. |
 | P2 bounded activation decay | none | NOT FOUND | Repository search found no activation or decay implementation. `docs/LIQUID_NEUROLOGY_DESIGN_CONTEXT.md` does not specify one. |
@@ -49,7 +49,7 @@ The database lived in a temporary directory under `/tmp` and was deleted with it
 | second `run-once` | `status: idle` |
 | counts after replay | agenda 1, executions succeeded 1, events 20 |
 | tamper seq 1 payload to `tampered` | row changed |
-| `verify` after tamper | FAILED: `ok: false`, `broken_at: 1`, `reason: event_hash_mismatch`. Process exit stayed 0 |
+| `verify` after tamper | FAILED: `ok: false`, `broken_at: 1`, `reason: event_hash_mismatch`. That snapshot's process exit stayed 0. Current `verify` exits 1 on an invalid chain |
 | `verify-events` after tamper | FAILED: `valid: false`, `invalid_sequence: 1`, process exit 1 |
 
 ## Acceptance gauntlet

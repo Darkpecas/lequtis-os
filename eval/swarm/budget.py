@@ -17,6 +17,18 @@ COST = {
     "lease": {"tokens": 4, "tool_calls": 1, "wall_ms": 6},
 }
 
+# Local-model run only. Tool calls and simulated wall stay on the mock schedule.
+# The token cap is larger so one real completion fits, and it is the same for every arm.
+LOCAL_CALL_TOKEN_BUDGET = 800
+LOCAL_CAP = {"tokens": 3072, "tool_calls": 12, "wall_ms": 120}
+LOCAL_COST = {
+    "plan": dict(COST["plan"]),
+    "worker": {"tokens": LOCAL_CALL_TOKEN_BUDGET, "tool_calls": 1, "wall_ms": COST["worker"]["wall_ms"]},
+    "synthesize": dict(COST["synthesize"]),
+    "verify": dict(COST["verify"]),
+    "lease": dict(COST["lease"]),
+}
+
 
 def add_costs(*parts: dict[str, int]) -> dict[str, int]:
     total = {"tokens": 0, "tool_calls": 0, "wall_ms": 0}

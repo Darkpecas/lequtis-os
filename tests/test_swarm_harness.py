@@ -104,6 +104,32 @@ class SwarmHarnessTests(unittest.TestCase):
         with self.assertRaises(ProviderRefused) as refused:
             load_provider({"provider": "openai", "money_cap": 1})
         self.assertIn("not shipped", str(refused.exception))
+        with self.assertRaises(ProviderRefused):
+            load_provider({"provider": "local"})
+        with self.assertRaises(ProviderRefused):
+            load_provider({"provider": "local", "money_cap": 1})
+        local = load_provider({"provider": "local", "money_cap": 0})
+        self.assertEqual(local.name, "local")
+        self.assertEqual(local.money_spent, 0)
+        self.assertEqual(local.network_calls, 0)
+
+    def test_local_parser_keeps_scope_and_marks_a_bad_citation(self):
+        from eval.swarm.worker import parse_model_output
+
+        packet = packets()[1]
+        parsed = parse_model_output(
+            '{"verdict":"CLAIMS","scope_id":"syn-02","claims":[{"proposition":"beacon = north","source_ids":["src-02a"]}]}',
+            packet,
+        )
+        self.assertEqual(parsed["verdict"], "CLAIMS")
+        self.assertEqual(parsed["scope_id"], "syn-02")
+        self.assertEqual(classify_claim(parsed["claims"][0], packet, keys()["syn-02"]), "supported")
+        changed = parse_model_output(
+            '{"verdict":"CLAIMS","scope_id":"pwned","claims":[{"proposition":"scope = pwned","source_ids":["src-02a"]}]}',
+            packet,
+        )
+        self.assertEqual(changed["scope_id"], "pwned")
+        self.assertEqual(classify_claim(changed["claims"][0], packet, keys()["syn-02"]), "fabricated")
 
     def test_budget_reservation_is_atomic_and_refuses_overspend(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -60,7 +60,11 @@ def _arm_result(
     graded = grade(packets, outputs)
     failures = list(safety)
     for packet in packets:
-        failures.extend(safety_failures_for_record(packet, outputs.get(packet["packet_id"])))
+        record = outputs.get(packet["packet_id"])
+        if record:
+            for item in record.get("safety_failures") or []:
+                failures.append(item)
+        failures.extend(safety_failures_for_record(packet, record))
     # Preserve order while dropping repeats.
     deduped: list[str] = []
     for item in failures:
@@ -93,6 +97,8 @@ def _arm_result(
                 "scope_id": record.get("scope_id"),
                 "claims": record.get("claims"),
                 "injections_ignored": record.get("injections_ignored"),
+                "safety_failures": record.get("safety_failures") or [],
+                "model_usage": record.get("model_usage"),
             }
             for packet_id, record in outputs.items()
         },
@@ -151,15 +157,20 @@ def _one(packet: dict[str, Any], prior: list[str], provider: MockProvider, seed:
     return extract(packet, prior, seed, provider, SideEffects())
 
 
-def run_arm_a(packets, budget, board, provider, seed) -> dict[str, Any]:
-    cost = add_costs(COST["plan"], COST["worker"], COST["verify"])
+def _table(costs: dict[str, dict[str, int]] | None) -> dict[str, dict[str, int]]:
+    return costs or COST
+
+
+def run_arm_a(packets, budget, board, provider, seed, costs=None) -> dict[str, Any]:
+    table = _table(costs)
+    cost = add_costs(table["plan"], table["worker"], table["verify"])
 
     def produce(packet: dict[str, Any], prior: list[str]) -> tuple[dict[str, Any], int]:
         return _one(packet, prior, provider, seed), 1
 
     def advance(clock: ScheduleClock, size: int) -> None:
         if size:
-            clock.serial(COST["plan"]["wall_ms"] + COST["worker"]["wall_ms"] + COST["verify"]["wall_ms"])
+            clock.serial(table["plan"]["wall_ms"] + table["worker"]["wall_ms"] + table["verify"]["wall_ms"])
 
     return _run(
         "A",
@@ -169,18 +180,19 @@ def run_arm_a(packets, budget, board, provider, seed) -> dict[str, Any]:
     )
 
 
-def run_arm_b(packets, budget, board, provider, seed) -> dict[str, Any]:
+def run_arm_b(packets, budget, board, provider, seed, costs=None) -> dict[str, Any]:
+    table = _table(costs)
     cost = add_costs(
-        COST["plan"], COST["worker"], COST["worker"], COST["worker"],
-        COST["synthesize"], COST["verify"],
+        table["plan"], table["worker"], table["worker"], table["worker"],
+        table["synthesize"], table["verify"],
     )
     # Wall reserved for the task is the critical path, not three serial workers.
     cost = {
         "tokens": cost["tokens"],
         "tool_calls": cost["tool_calls"],
         "wall_ms": (
-            COST["plan"]["wall_ms"] + COST["worker"]["wall_ms"]
-            + COST["synthesize"]["wall_ms"] + COST["verify"]["wall_ms"]
+            table["plan"]["wall_ms"] + table["worker"]["wall_ms"]
+            + table["synthesize"]["wall_ms"] + table["verify"]["wall_ms"]
         ),
     }
 
@@ -191,9 +203,9 @@ def run_arm_b(packets, budget, board, provider, seed) -> dict[str, Any]:
     def advance(clock: ScheduleClock, size: int) -> None:
         if not size:
             return
-        clock.serial(COST["plan"]["wall_ms"])
-        clock.parallel([COST["worker"]["wall_ms"], COST["worker"]["wall_ms"], COST["worker"]["wall_ms"]])
-        clock.serial(COST["synthesize"]["wall_ms"] + COST["verify"]["wall_ms"])
+        clock.serial(table["plan"]["wall_ms"])
+        clock.parallel([table["worker"]["wall_ms"], table["worker"]["wall_ms"], table["worker"]["wall_ms"]])
+        clock.serial(table["synthesize"]["wall_ms"] + table["verify"]["wall_ms"])
 
     return _run(
         "B",
@@ -203,9 +215,45 @@ def run_arm_b(packets, budget, board, provider, seed) -> dict[str, Any]:
     )
 
 
+def _member_safety(records: list[dict[str, Any]]) -> list[str]:
+    found: list[str] = []
+    for record in records:
+        for item in record.get("safety_failures") or []:
+            if item not in found:
+                found.append(item)
+    return found
+
+
+def _member_usage(records: list[dict[str, Any]]) -> dict[str, Any] | None:
+    prompt_tokens = completion_tokens = calls = 0
+    method = None
+    for record in records:
+        usage = record.get("model_usage") or {}
+        if not usage:
+            continue
+        prompt_tokens += int(usage.get("prompt_tokens") or 0)
+        completion_tokens += int(usage.get("completion_tokens") or 0)
+        calls += int(usage.get("calls") or 0)
+        method = usage.get("token_count_method")
+    if calls == 0:
+        return None
+    return {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "calls": calls,
+        "token_count_method": method,
+    }
+
+
 def _synthesize(records: list[dict[str, Any]], packet: dict[str, Any]) -> dict[str, Any]:
     verdicts = {record["verdict"] for record in records}
     scopes = {record["scope_id"] for record in records}
+    shared = {
+        "injections_ignored": sum(record["injections_ignored"] for record in records),
+        "safety_failures": _member_safety(records),
+        "model_usage": _member_usage(records),
+        "act_called": any(record["act_called"] for record in records),
+    }
     if len(verdicts) != 1 or scopes != {packet["packet_id"]}:
         return {
             "label": "SYNTHETIC",
@@ -214,13 +262,15 @@ def _synthesize(records: list[dict[str, Any]], packet: dict[str, Any]) -> dict[s
             "verdict": "UNKNOWN",
             "reason": "synthesis_disagreement",
             "claims": [],
-            "injections_ignored": sum(record["injections_ignored"] for record in records),
             "scope_id": packet["packet_id"],
-            "act_called": any(record["act_called"] for record in records),
+            **shared,
         }
     if verdicts == {"UNKNOWN"}:
         chosen = dict(records[0])
         chosen["seed"] = "ensemble"
+        chosen["safety_failures"] = shared["safety_failures"]
+        chosen["model_usage"] = shared["model_usage"]
+        chosen["injections_ignored"] = shared["injections_ignored"]
         return chosen
     signatures = [
         tuple(sorted(claim["proposition"] for claim in record["claims"]))
@@ -234,18 +284,21 @@ def _synthesize(records: list[dict[str, Any]], packet: dict[str, Any]) -> dict[s
             "verdict": "UNKNOWN",
             "reason": "synthesis_disagreement",
             "claims": [],
-            "injections_ignored": sum(record["injections_ignored"] for record in records),
             "scope_id": packet["packet_id"],
-            "act_called": False,
+            **shared,
         }
     chosen = dict(records[0])
     chosen["seed"] = "ensemble"
     chosen["reason"] = "synthesized"
+    chosen["safety_failures"] = shared["safety_failures"]
+    chosen["model_usage"] = shared["model_usage"]
+    chosen["injections_ignored"] = shared["injections_ignored"]
     return chosen
 
 
-def run_arm_c(packets, budget, board, provider, seed) -> dict[str, Any]:
-    cost = add_costs(COST["plan"], COST["worker"], COST["verify"])
+def run_arm_c(packets, budget, board, provider, seed, costs=None) -> dict[str, Any]:
+    table = _table(costs)
+    cost = add_costs(table["plan"], table["worker"], table["verify"])
 
     def produce(packet: dict[str, Any], prior: list[str]) -> tuple[dict[str, Any], int]:
         return _one(packet, prior, provider, seed), 1
@@ -253,9 +306,9 @@ def run_arm_c(packets, budget, board, provider, seed) -> dict[str, Any]:
     def advance(clock: ScheduleClock, size: int) -> None:
         if not size:
             return
-        clock.serial(COST["plan"]["wall_ms"])
-        clock.parallel([COST["worker"]["wall_ms"]] * size)
-        clock.serial(COST["verify"]["wall_ms"])
+        clock.serial(table["plan"]["wall_ms"])
+        clock.parallel([table["worker"]["wall_ms"]] * size)
+        clock.serial(table["verify"]["wall_ms"])
 
     return _run(
         "C",
@@ -265,8 +318,9 @@ def run_arm_c(packets, budget, board, provider, seed) -> dict[str, Any]:
     )
 
 
-def run_arm_d(packets, budget, board, provider, seed) -> dict[str, Any]:
-    cost = add_costs(COST["lease"], COST["worker"], COST["lease"], COST["verify"])
+def run_arm_d(packets, budget, board, provider, seed, costs=None) -> dict[str, Any]:
+    table = _table(costs)
+    cost = add_costs(table["lease"], table["worker"], table["lease"], table["verify"])
 
     def produce(packet: dict[str, Any], prior: list[str]) -> tuple[dict[str, Any], int]:
         return _one(packet, prior, provider, seed), 1
@@ -275,10 +329,10 @@ def run_arm_d(packets, budget, board, provider, seed) -> dict[str, Any]:
         if not size:
             return
         # Claims and commits serialize on one SQLite board. Worker bodies overlap.
-        clock.serial(COST["lease"]["wall_ms"] * size)
-        clock.parallel([COST["worker"]["wall_ms"]] * size)
-        clock.serial(COST["lease"]["wall_ms"] * size)
-        clock.serial(COST["verify"]["wall_ms"])
+        clock.serial(table["lease"]["wall_ms"] * size)
+        clock.parallel([table["worker"]["wall_ms"]] * size)
+        clock.serial(table["lease"]["wall_ms"] * size)
+        clock.serial(table["verify"]["wall_ms"])
 
     return _run(
         "D",
@@ -296,8 +350,16 @@ ARMS = {
 }
 
 
-def run_arm(name: str, packets, work_dir: Path, seed: int, provider: MockProvider | None = None) -> dict[str, Any]:
+def run_arm(
+    name: str,
+    packets,
+    work_dir: Path,
+    seed: int,
+    provider: MockProvider | None = None,
+    cap: dict[str, int] | None = None,
+    costs: dict[str, dict[str, int]] | None = None,
+) -> dict[str, Any]:
     work_dir.mkdir(parents=True, exist_ok=True)
-    budget = Budget(work_dir / "budget.db")
+    budget = Budget(work_dir / "budget.db", cap=cap)
     board = KernelBoard(work_dir / "board.db")
-    return ARMS[name](packets, budget, board, provider or MockProvider(), seed)
+    return ARMS[name](packets, budget, board, provider or MockProvider(), seed, costs=costs)

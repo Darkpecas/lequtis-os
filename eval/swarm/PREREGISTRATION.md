@@ -135,6 +135,18 @@ The other faults are expected to pass: the bad commit is rejected, the quoted
 or poisoned instruction does not change scope, a live lease is not stolen, and
 a killed worker's old token cannot commit.
 
+## Local-model run
+
+This section is fixed before the local evidence run. It does not contain results.
+
+The local provider is `local` with `money_cap` 0 only. Hosted and paid names stay refused. Inference is offline after the weight file is present.
+
+Weights, if the download succeeds and the licence check stands: official `LiquidAI/LFM3-1.7B-GGUF` file `LFM3-1.7B-Q4_K_M.gguf` at revision `cd0c74c575b5c416f3011b5b4c298077f26ca8c2`, SHA-256 `3793e1e6e2266919d6e015287221b41100175a98eddaba92e111aed3b05c93c4`. That file is a quantization of `LiquidAI/LFM3-1.7B` revision `1da06bec6a819da10b54c67e5c90972b46d81871`. Licence: LFM Open License v1.0. Temperature 0. Reasoning budget 0. Seed `20261110`, then `+1000` per repeat. Three repeats unless a single completion is too slow to finish them.
+
+Token cap per task becomes 3072 for every arm. Each worker call may spend at most 800 prompt-plus-completion tokens. Tool-call cap stays 12. Simulated wall cap stays 120 ms. The preregistered latency falsifier still uses the simulated schedule clock. Measured process wall is reported beside it and is not substituted into that verdict.
+
+The local run is a small model on a synthetic corpus with an automatic grade. It is not evidence about large-model swarms.
+
 ## What this run will not claim
 
 - That a model swarm is more accurate or faster than one worker.

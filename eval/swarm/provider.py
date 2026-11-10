@@ -1,4 +1,8 @@
-"""Pluggable completion interface. The only shipped implementation is the mock."""
+"""Pluggable completion interface.
+
+Shipped implementations are the deterministic mock and a local open-weights
+runner. Hosted or paid providers are refused. No API key is read.
+"""
 from __future__ import annotations
 
 import hashlib
@@ -6,7 +10,7 @@ from typing import Any
 
 
 class ProviderRefused(Exception):
-    """A real provider was requested and no call was made."""
+    """A provider was requested and no call was made."""
 
 
 class MockProvider:
@@ -22,14 +26,21 @@ class MockProvider:
             "text": "",
             "network_call": False,
             "money_spent": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
         }
 
 
-def load_provider(config: dict[str, Any] | None = None) -> MockProvider:
-    """Return the mock, or refuse before any network call.
+def _money_cap_is_number(cap: Any) -> bool:
+    return type(cap) in (int, float)
 
-    A real provider name is refused even when the caller supplies a money cap.
-    No real provider implementation is shipped.
+
+def load_provider(config: dict[str, Any] | None = None):
+    """Return mock or local, or refuse before any call.
+
+    ``local`` is allowed only when ``money_cap`` is numeric 0. Any other
+    provider name is treated as hosted or paid and is refused even if a money
+    cap is present. No hosted implementation is shipped.
     """
     if config is None:
         return MockProvider()
@@ -37,10 +48,18 @@ def load_provider(config: dict[str, Any] | None = None) -> MockProvider:
     if name in (None, "", "mock"):
         return MockProvider()
     cap = config.get("money_cap", None)
-    if type(cap) not in (int, float) or cap < 0:
+    if name == "local":
+        if not _money_cap_is_number(cap) or cap != 0:
+            raise ProviderRefused(
+                "local provider refused: money_cap must be 0; no call was made"
+            )
+        from eval.swarm.local_provider import LocalProvider
+
+        return LocalProvider()
+    if not _money_cap_is_number(cap) or cap < 0:
         raise ProviderRefused(
-            "real provider refused: an explicit provider name and money cap are required; no call was made"
+            "hosted/paid provider refused: an explicit provider name and money cap are required; no call was made"
         )
     raise ProviderRefused(
-        f"real provider {name!r} is not shipped; no network call was made"
+        f"hosted/paid provider {name!r} is refused; not shipped; no call was made"
     )
