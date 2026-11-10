@@ -25,6 +25,7 @@ import sys
 import tempfile
 import time
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -38,7 +39,11 @@ STATE = Path(os.environ.get("LEQUTIS_STATE", ROOT / "state"))
 # LEQUTIS_DB selects one file. When it is unset, the database stays
 # STATE/lequtis.db so LEQUTIS_STATE keeps its existing meaning.
 DB = Path(os.environ.get("LEQUTIS_DB", STATE / "lequtis.db")).expanduser()
-SCHEMA_REVISION = "lequtis-os-kernel-3"
+SCHEMA_REVISION = "lequtis-os-kernel-4"
+PREVIOUS_SCHEMA_REVISION = "lequtis-os-kernel-3"
+MIGRATION_SQL = (
+    ROOT / "database" / "migrations" / "lequtis-os-kernel-3-to-4.sql"
+)
 EVIDENCE_LABEL = "LOCAL PROOF, NOT LIVE VPS VERIFIED"
 VERIFIER = Path(__file__).with_name("verifier_main.py")
 ARTIFACT_NAME = re.compile(
@@ -47,7 +52,7 @@ ARTIFACT_NAME = re.compile(
 
 STATE.mkdir(parents=True, exist_ok=True)
 
-REQUIRED_COLUMNS = {
+PREVIOUS_REQUIRED_COLUMNS = {
     "identity": {"key", "value"},
     "memory": {"id", "kind", "content", "created", "updated"},
     "agenda": {
@@ -83,6 +88,16 @@ REQUIRED_COLUMNS = {
     },
 }
 
+REQUIRED_COLUMNS = {
+    **{key: set(value) for key, value in PREVIOUS_REQUIRED_COLUMNS.items()},
+    "agenda": PREVIOUS_REQUIRED_COLUMNS["agenda"] | {"cancelled_at"},
+    "executions": PREVIOUS_REQUIRED_COLUMNS["executions"] | {"cancelled_at"},
+    "cancellations": {
+        "id", "idempotency_key", "request_hash", "target_kind", "target_id",
+        "reason", "created",
+    },
+}
+
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -112,52 +127,199 @@ def _schema_refuse(message: str) -> None:
     raise SystemExit(3)
 
 
-def _require_compatible() -> None:
-    """Read an existing database without writing. Exit 3 when it is not this revision.
+@contextmanager
+def _readonly_snapshot(db_path: Path):
+    """Read a copy, including any WAL, without writing the original.
 
-    The check opens a copy, including any WAL, so a committed but uncheckpointed
-    schema is visible. ``immutable=1`` would ignore that WAL, and opening the
-    original ``mode=ro`` can create a new WAL file beside it.
+    ``immutable=1`` would ignore a committed but uncheckpointed WAL, and opening
+    the original ``mode=ro`` can create a new WAL file beside it.
     """
     with tempfile.TemporaryDirectory(prefix="lequtis-schema-guard-") as tmp:
         snap = Path(tmp) / "snapshot.db"
-        shutil.copy2(DB, snap)
+        shutil.copy2(db_path, snap)
         for suffix in ("-wal", "-shm"):
-            side = Path(str(DB) + suffix)
+            side = Path(str(db_path) + suffix)
             try:
                 shutil.copy2(side, Path(str(snap) + suffix))
             except FileNotFoundError:
                 continue
-        _require_snapshot(snap)
+        uri = "file:" + str(snap.resolve()) + "?mode=ro"
+        try:
+            db = sqlite3.connect(uri, uri=True)
+        except sqlite3.OperationalError as exc:
+            _schema_refuse(f"schema guard: {exc}")
+        db.row_factory = sqlite3.Row
+        try:
+            db.execute("PRAGMA query_only=ON")
+            yield db
+        finally:
+            db.close()
 
 
-def _require_snapshot(snap: Path) -> None:
-    uri = "file:" + str(snap.resolve()) + "?mode=ro"
-    try:
-        db = sqlite3.connect(uri, uri=True)
-    except sqlite3.OperationalError as exc:
-        _schema_refuse(f"schema guard: {exc}")
-    db.row_factory = sqlite3.Row
-    try:
-        db.execute("PRAGMA query_only=ON")
-        for table, required in REQUIRED_COLUMNS.items():
-            found = _columns(db, table)
-            if found is None or not required.issubset(found):
-                missing = sorted(required if found is None else required - found)
-                _schema_refuse(
-                    "schema guard: incompatible database, not modified: "
-                    + table + " " + ",".join(missing)
-                )
+def _schema_inventory(db: sqlite3.Connection) -> dict[str, Any]:
+    names = {
+        row[0]
+        for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    tables = {name: _columns(db, name) for name in names}
+    revision = None
+    if "identity" in names:
         row = db.execute(
             "SELECT value FROM identity WHERE key='schema_revision'"
         ).fetchone()
-        if row is None or row[0] != SCHEMA_REVISION:
-            found = None if row is None else row[0]
+        revision = None if row is None else row[0]
+    return {"revision": revision, "tables": tables, "table_names": names}
+
+
+def _columns_cover(found: set[str] | None, required: set[str]) -> bool:
+    return found is not None and required.issubset(found)
+
+
+def _is_current_schema(inventory: dict[str, Any]) -> bool:
+    if inventory["revision"] != SCHEMA_REVISION:
+        return False
+    for table, required in REQUIRED_COLUMNS.items():
+        if not _columns_cover(inventory["tables"].get(table), required):
+            return False
+    return True
+
+
+def _is_previous_schema(inventory: dict[str, Any]) -> bool:
+    """True only for an untouched kernel-3 database.
+
+    A partial migration (the new column or table already present, or the
+    revision already moved) is not previous and is not current. It is refused.
+    """
+    if inventory["revision"] != PREVIOUS_SCHEMA_REVISION:
+        return False
+    if "cancellations" in inventory["table_names"]:
+        return False
+    for table, required in PREVIOUS_REQUIRED_COLUMNS.items():
+        found = inventory["tables"].get(table)
+        if not _columns_cover(found, required):
+            return False
+        if table in ("agenda", "executions") and found is not None and "cancelled_at" in found:
+            return False
+    return True
+
+
+def _require_open_db(db: sqlite3.Connection) -> None:
+    inventory = _schema_inventory(db)
+    if _is_current_schema(inventory):
+        return
+    for table, required in REQUIRED_COLUMNS.items():
+        found = inventory["tables"].get(table)
+        if not _columns_cover(found, required):
+            missing = sorted(required if found is None else required - found)
             _schema_refuse(
-                f"schema guard: revision {found!r} is not {SCHEMA_REVISION}; database not modified"
+                "schema guard: incompatible database, not modified: "
+                + table + " " + ",".join(missing)
             )
+    _schema_refuse(
+        f"schema guard: revision {inventory['revision']!r} is not {SCHEMA_REVISION}; database not modified"
+    )
+
+
+def _require_compatible() -> None:
+    """Read an existing database without writing. Exit 3 when it is not this revision."""
+    with _readonly_snapshot(DB) as db:
+        _require_open_db(db)
+
+
+def _apply_sql_statements(db: sqlite3.Connection, script: str) -> None:
+    """Run statements inside the caller's transaction.
+
+    ``executescript`` issues a COMMIT first, which would break the migration
+    transaction. Split on semicolons; the migration file has none inside literals.
+    """
+    for statement in script.split(";"):
+        if statement.strip():
+            db.execute(statement)
+
+
+def migrate_schema() -> dict[str, Any]:
+    """Move an untouched kernel-3 database to kernel-4, or create a new one.
+
+    A database that is already kernel-4 is left unchanged. Anything else is
+    refused with exit 3 and is not written. Migration is explicit: ``init`` and
+    ``status`` do not migrate.
+    """
+    if not DB.exists():
+        init()
+        return {
+            "status": "created",
+            "schema_revision": SCHEMA_REVISION,
+            "evidence_label": EVIDENCE_LABEL,
+        }
+    with _readonly_snapshot(DB) as db:
+        inventory = _schema_inventory(db)
+    if _is_current_schema(inventory):
+        return {
+            "status": "current",
+            "schema_revision": SCHEMA_REVISION,
+            "evidence_label": EVIDENCE_LABEL,
+        }
+    if not _is_previous_schema(inventory):
+        _schema_refuse(
+            "schema guard: database is not "
+            + PREVIOUS_SCHEMA_REVISION
+            + " or "
+            + SCHEMA_REVISION
+            + "; database not modified"
+        )
+    if not MIGRATION_SQL.is_file():
+        _schema_refuse(
+            "schema guard: migration file missing: " + str(MIGRATION_SQL)
+        )
+    script = MIGRATION_SQL.read_text(encoding="utf-8")
+    db = connect()
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        live = _schema_inventory(db)
+        if _is_current_schema(live):
+            db.rollback()
+            return {
+                "status": "current",
+                "schema_revision": SCHEMA_REVISION,
+                "evidence_label": EVIDENCE_LABEL,
+            }
+        if not _is_previous_schema(live):
+            db.rollback()
+            _schema_refuse(
+                "schema guard: database changed before migration; database not modified"
+            )
+        _apply_sql_statements(db, script)
+        updated = db.execute(
+            "UPDATE identity SET value=? WHERE key='schema_revision'",
+            (SCHEMA_REVISION,),
+        ).rowcount
+        if updated != 1:
+            db.rollback()
+            _schema_refuse(
+                "schema guard: schema_revision row missing; database not modified"
+            )
+        _append_event(
+            db,
+            "schema.migrated",
+            {"from": PREVIOUS_SCHEMA_REVISION, "to": SCHEMA_REVISION},
+        )
+        db.commit()
+    except SystemExit:
+        raise
+    except Exception:
+        try:
+            db.execute("ROLLBACK")
+        except sqlite3.DatabaseError:
+            pass
+        raise
     finally:
         db.close()
+    return {
+        "status": "migrated",
+        "from": PREVIOUS_SCHEMA_REVISION,
+        "schema_revision": SCHEMA_REVISION,
+        "evidence_label": EVIDENCE_LABEL,
+    }
 
 
 def init() -> None:
@@ -188,7 +350,8 @@ def init() -> None:
             created TEXT NOT NULL,
             updated TEXT NOT NULL,
             idempotency_key TEXT,
-            request_hash TEXT
+            request_hash TEXT,
+            cancelled_at TEXT
         );
 
         CREATE UNIQUE INDEX IF NOT EXISTS idx_agenda_idempotency
@@ -285,7 +448,18 @@ def init() -> None:
             expected_sha256 TEXT,
             verifier_challenge TEXT,
             claimed_verdict TEXT,
+            cancelled_at TEXT,
             UNIQUE(agenda_id, attempt)
+        );
+
+        CREATE TABLE IF NOT EXISTS cancellations (
+            id TEXT PRIMARY KEY,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            request_hash TEXT NOT NULL,
+            target_kind TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            reason TEXT,
+            created TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS verifier_observations (
@@ -347,27 +521,33 @@ def init() -> None:
 # Event fabric (hash-chained evidence)
 # ---------------------------------------------------------------------------
 
-def event(event_type: str, payload: dict[str, Any]) -> str:
+def _append_event(
+    db: sqlite3.Connection, event_type: str, payload: dict[str, Any]
+) -> str:
+    """Append one hash-chained event on the caller's connection and transaction."""
     payload_s = json.dumps(payload, sort_keys=True)
     ts = now()
-
-    with connect() as db:
-        row = db.execute(
-            "SELECT event_hash FROM events ORDER BY seq DESC LIMIT 1"
-        ).fetchone()
-        previous = row[0] if row else "GENESIS"
-        raw = previous + "|" + ts + "|" + event_type + "|" + payload_s
-        digest = hashlib.sha256(raw.encode()).hexdigest()
-        event_id = str(uuid.uuid4())
-        db.execute(
-            """
-            INSERT INTO events
-            (event_id,ts,event_type,payload,previous_hash,event_hash)
-            VALUES (?,?,?,?,?,?)
-            """,
-            (event_id, ts, event_type, payload_s, previous, digest),
-        )
+    row = db.execute(
+        "SELECT event_hash FROM events ORDER BY seq DESC LIMIT 1"
+    ).fetchone()
+    previous = row[0] if row else "GENESIS"
+    raw = previous + "|" + ts + "|" + event_type + "|" + payload_s
+    digest = hashlib.sha256(raw.encode()).hexdigest()
+    event_id = str(uuid.uuid4())
+    db.execute(
+        """
+        INSERT INTO events
+        (event_id,ts,event_type,payload,previous_hash,event_hash)
+        VALUES (?,?,?,?,?,?)
+        """,
+        (event_id, ts, event_type, payload_s, previous, digest),
+    )
     return digest
+
+
+def event(event_type: str, payload: dict[str, Any]) -> str:
+    with connect() as db:
+        return _append_event(db, event_type, payload)
 
 
 def verify_event_chain() -> dict[str, Any]:
@@ -1703,7 +1883,8 @@ def _claim_next() -> dict[str, Any] | None:
         db.execute("BEGIN IMMEDIATE")
         row = db.execute(
             """
-            SELECT id, title FROM agenda WHERE status='open'
+            SELECT id, title FROM agenda
+            WHERE status='open' AND title NOT LIKE 'propose: %'
             ORDER BY priority DESC, created, id LIMIT 1
             """
         ).fetchone()
@@ -1763,18 +1944,87 @@ def _claim_next() -> dict[str, Any] | None:
     }
 
 
+def _execution_fence_row(db: sqlite3.Connection, execution_id: str) -> sqlite3.Row | None:
+    return db.execute(
+        """
+        SELECT e.status AS execution_status,
+               e.lease_token AS lease_token,
+               e.cancelled_at AS execution_cancelled,
+               e.action AS action,
+               e.agenda_id AS agenda_id,
+               e.result AS result,
+               a.status AS agenda_status,
+               a.cancelled_at AS agenda_cancelled
+        FROM executions e
+        JOIN agenda a ON a.id = e.agenda_id
+        WHERE e.id=?
+        """,
+        (execution_id,),
+    ).fetchone()
+
+
+def _is_cancel_fenced(row: sqlite3.Row | None) -> bool:
+    if row is None:
+        return False
+    return bool(
+        row["execution_cancelled"]
+        or row["agenda_cancelled"]
+        or row["execution_status"] == "cancelled"
+        or row["agenda_status"] == "cancelled"
+    )
+
+
+def _execution_is_cancelled(execution_id: str) -> bool:
+    with connect() as db:
+        return _is_cancel_fenced(_execution_fence_row(db, execution_id))
+
+
+def _finish_rejection(row: sqlite3.Row | None, lease_token: str) -> dict[str, Any]:
+    if row is None:
+        reason = "missing_execution"
+    elif _is_cancel_fenced(row):
+        reason = "cancelled"
+    elif (
+        row["execution_status"] in ("succeeded", "failed")
+        and row["lease_token"] == lease_token
+    ):
+        reason = "already_committed"
+    else:
+        reason = "stale_fence"
+    return {"accepted": False, "reason": reason, "evidence_label": EVIDENCE_LABEL}
+
+
 def _finish_execution(
     task: dict[str, Any],
     status_value: str,
     result: str | None = None,
     error: BaseException | str | None = None,
-) -> bool:
+) -> dict[str, Any]:
+    """Commit a terminal result for the current lease, or reject it.
+
+    Cancellation is checked inside this transaction. A worker that already
+    finished still cannot store the result after cancel. The lease token is
+    not enough.
+    """
     ts = now()
-    with connect() as db:
+    db = connect()
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        row = _execution_fence_row(db, task["id"])
+        if row is None or _is_cancel_fenced(row):
+            db.rollback()
+            return _finish_rejection(row, task["lease_token"])
+        if row["lease_token"] != task["lease_token"] or row["execution_status"] != "running":
+            db.rollback()
+            return _finish_rejection(row, task["lease_token"])
         updated = db.execute(
             """
             UPDATE executions SET status=?, result=?, error=?, completed_at=?
-            WHERE id=? AND status='running' AND lease_token=?
+            WHERE id=? AND status='running' AND lease_token=? AND cancelled_at IS NULL
+              AND agenda_id IN (
+                SELECT id FROM agenda
+                WHERE id=? AND cancelled_at IS NULL AND status!='cancelled'
+              )
             """,
             (
                 status_value,
@@ -1783,53 +2033,93 @@ def _finish_execution(
                 ts,
                 task["id"],
                 task["lease_token"],
+                task["agenda_id"],
             ),
         ).rowcount
         if updated != 1:
-            return False
+            fresh = _execution_fence_row(db, task["id"])
+            db.rollback()
+            return _finish_rejection(fresh, task["lease_token"])
         agenda_status = "complete" if status_value == "succeeded" else "blocked"
         db.execute(
-            "UPDATE agenda SET status=?, updated=? WHERE id=? AND status='running'",
+            """
+            UPDATE agenda SET status=?, updated=?
+            WHERE id=? AND status='running' AND cancelled_at IS NULL
+            """,
             (agenda_status, ts, task["agenda_id"]),
         )
-    event(
-        "execution.finished" if status_value == "succeeded" else "execution.failed",
-        {
-            "execution_id": task["id"],
-            "agenda_id": task["agenda_id"],
-            "status": status_value,
-            "result": result,
-            "error": None if error is None else str(error),
-        },
-    )
-    event("agenda.updated", {"agenda_id": task["agenda_id"], "status": agenda_status})
-    event("loop.update_agenda", {
-        "execution_id": task["id"],
-        "agenda_id": task["agenda_id"],
-        "status": agenda_status,
-        "stage": "UPDATE AGENDA",
-    })
-    return True
+        _append_event(
+            db,
+            "execution.finished" if status_value == "succeeded" else "execution.failed",
+            {
+                "execution_id": task["id"],
+                "agenda_id": task["agenda_id"],
+                "status": status_value,
+                "result": result,
+                "error": None if error is None else str(error),
+            },
+        )
+        _append_event(
+            db,
+            "agenda.updated",
+            {"agenda_id": task["agenda_id"], "status": agenda_status},
+        )
+        _append_event(
+            db,
+            "loop.update_agenda",
+            {
+                "execution_id": task["id"],
+                "agenda_id": task["agenda_id"],
+                "status": agenda_status,
+                "stage": "UPDATE AGENDA",
+            },
+        )
+        db.commit()
+    except Exception:
+        try:
+            db.execute("ROLLBACK")
+        except sqlite3.DatabaseError:
+            pass
+        raise
+    finally:
+        db.close()
+    return {"accepted": True, "reason": "committed", "evidence_label": EVIDENCE_LABEL}
 
 
-def _pause_after_claim(task: dict[str, Any]) -> None:
-    pause = os.environ.get("LEQUTIS_PAUSE_AFTER_CLAIM")
+def _pause_for(env_name: str, task: dict[str, Any]) -> None:
+    pause = os.environ.get(env_name)
     if not pause:
         return
     folder = Path(pause)
     folder.mkdir(parents=True, exist_ok=True)
+    execution_id = task.get("execution_id") or task.get("id")
     (folder / "claimed").write_text(
         json.dumps({
-            "execution_id": task["id"],
+            "execution_id": execution_id,
             "lease_token": task["lease_token"],
             "pid": os.getpid(),
-            "artifact_relpath": task["artifact_relpath"],
+            "artifact_relpath": task.get("artifact_relpath"),
+            "agenda_id": task.get("agenda_id"),
         }),
         encoding="utf-8",
     )
     deadline = time.time() + 20
     while time.time() < deadline and not (folder / "release").exists():
         time.sleep(0.02)
+
+
+def _pause_after_claim(task: dict[str, Any]) -> None:
+    _pause_for("LEQUTIS_PAUSE_AFTER_CLAIM", task)
+
+
+def _cancelled_result(task: dict[str, Any], reason: str = "cancelled") -> dict[str, Any]:
+    return {
+        "status": "cancelled",
+        "reason": reason,
+        "agenda_id": task["agenda_id"],
+        "execution_id": task["id"],
+        "evidence_label": EVIDENCE_LABEL,
+    }
 
 
 def _verify_independently(task: dict[str, Any], digest: str) -> dict[str, Any]:
@@ -1877,6 +2167,8 @@ def run_once() -> dict[str, Any]:
     if task is None:
         return {"status": "idle", "evidence_label": EVIDENCE_LABEL}
     _pause_after_claim(task)
+    if _execution_is_cancelled(task["id"]):
+        return _cancelled_result(task)
     try:
         if task["action"] != "remember":
             raise ValueError("No safe deterministic action supports this goal")
@@ -1924,7 +2216,9 @@ def run_once() -> dict[str, Any]:
             event("loop.evaluate", {
                 "execution_id": task["id"], "passed": False, "stage": "EVALUATE",
             })
-            _finish_execution(task, "failed", error=verdict.get("reason"))
+            finished = _finish_execution(task, "failed", error=verdict.get("reason"))
+            if not finished["accepted"] and finished["reason"] == "cancelled":
+                return _cancelled_result(task)
             return {
                 "status": "failed",
                 "agenda_id": task["agenda_id"],
@@ -1964,8 +2258,18 @@ def run_once() -> dict[str, Any]:
             "experience_id": experience_id,
             "stage": "REMEMBER",
         })
-        if not _finish_execution(task, "succeeded", result=result):
-            raise RuntimeError("stale fence rejected completion")
+        _pause_for("LEQUTIS_PAUSE_BEFORE_COMMIT", task)
+        finished = _finish_execution(task, "succeeded", result=result)
+        if not finished["accepted"]:
+            if finished["reason"] == "cancelled":
+                return _cancelled_result(task)
+            return {
+                "status": "failed",
+                "agenda_id": task["agenda_id"],
+                "reason": finished["reason"],
+                "error": finished["reason"],
+                "evidence_label": EVIDENCE_LABEL,
+            }
         return {
             "status": "succeeded",
             "agenda_id": task["agenda_id"],
@@ -1974,6 +2278,8 @@ def run_once() -> dict[str, Any]:
             "evidence_label": EVIDENCE_LABEL,
         }
     except Exception as exc:
+        if _execution_is_cancelled(task["id"]):
+            return _cancelled_result(task)
         try:
             event("execution.evaluate", {
                 "execution_id": task["id"], "success": False, "error": str(exc),
@@ -1982,13 +2288,391 @@ def run_once() -> dict[str, Any]:
                 "execution_id": task["id"], "passed": False, "stage": "EVALUATE",
             })
         finally:
-            _finish_execution(task, "failed", error=exc)
+            finished = _finish_execution(task, "failed", error=exc)
+        if not finished["accepted"] and finished["reason"] == "cancelled":
+            return _cancelled_result(task)
         return {
             "status": "failed",
             "agenda_id": task["agenda_id"],
             "error": str(exc),
             "evidence_label": EVIDENCE_LABEL,
         }
+
+
+def claim_proposal(agenda_id: str | None = None) -> dict[str, Any]:
+    """Pull one open ``propose:`` agenda item. Does not call ACT.
+
+    With no agenda id, the next open proposal is claimed. That is the pull
+    used by decentralized allocation. A specific id is the central scheduler's
+    assignment. Either way the lease is fenced with the kernel token, pid, and
+    process start.
+    """
+    token = uuid.uuid4().hex
+    db = connect()
+    task: dict[str, Any] | None = None
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        if agenda_id:
+            row = db.execute(
+                "SELECT id, title FROM agenda WHERE id=? AND status='open'",
+                (agenda_id,),
+            ).fetchone()
+        else:
+            row = db.execute(
+                """
+                SELECT id, title FROM agenda
+                WHERE status='open' AND title LIKE 'propose: %'
+                ORDER BY priority DESC, created, id
+                LIMIT 1
+                """
+            ).fetchone()
+        if row is None:
+            db.rollback()
+            return {"status": "idle", "evidence_label": EVIDENCE_LABEL}
+        title = row["title"]
+        if not str(title).startswith("propose: "):
+            db.rollback()
+            return {
+                "status": "refused",
+                "reason": "not_a_proposal",
+                "evidence_label": EVIDENCE_LABEL,
+            }
+        agenda_pk = row["id"]
+        changed = db.execute(
+            "UPDATE agenda SET status='running', updated=? WHERE id=? AND status='open'",
+            (now(), agenda_pk),
+        ).rowcount
+        if changed != 1:
+            db.rollback()
+            return {"status": "idle", "evidence_label": EVIDENCE_LABEL}
+        attempt = db.execute(
+            "SELECT COALESCE(MAX(attempt),0)+1 FROM executions WHERE agenda_id=?",
+            (agenda_pk,),
+        ).fetchone()[0]
+        execution_id = str(uuid.uuid4())
+        db.execute(
+            """
+            INSERT INTO executions
+            (id,agenda_id,attempt,status,action,input,started_at,claim_generation,lease_token,
+             worker_pid,lease_proc_start,correlation_id,claimed_verdict)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                execution_id, agenda_pk, attempt, "running", "propose_claim", title, now(),
+                attempt, token, os.getpid(), proc_start_token(os.getpid()), str(uuid.uuid4()),
+                None,
+            ),
+        )
+        _append_event(db, "execution.claimed", {
+            "action": "propose_claim",
+            "agenda_id": agenda_pk,
+            "attempt": attempt,
+            "execution_id": execution_id,
+        })
+        db.commit()
+        task = {
+            "status": "claimed",
+            "execution_id": execution_id,
+            "id": execution_id,
+            "agenda_id": agenda_pk,
+            "title": title,
+            "attempt": attempt,
+            "lease_token": token,
+            "claim_generation": attempt,
+            "evidence_label": EVIDENCE_LABEL,
+        }
+    except Exception:
+        try:
+            db.execute("ROLLBACK")
+        except sqlite3.DatabaseError:
+            pass
+        raise
+    finally:
+        db.close()
+    assert task is not None
+    _pause_after_claim(task)
+    return task
+
+
+def commit_result(execution_id: str, lease_token: str, result: str) -> dict[str, Any]:
+    """Store a proposal result for a current lease. Does not call ACT.
+
+    ``remember`` executions cannot use this path. Their result commit stays
+    inside ``run_once``, after the independent verifier.
+    """
+    with connect() as db:
+        row = db.execute(
+            "SELECT id, agenda_id, action FROM executions WHERE id=?",
+            (execution_id,),
+        ).fetchone()
+    if row is None:
+        return {
+            "accepted": False,
+            "reason": "missing_execution",
+            "evidence_label": EVIDENCE_LABEL,
+        }
+    if row["action"] != "propose_claim":
+        return {
+            "accepted": False,
+            "reason": "commit_refused_for_action",
+            "evidence_label": EVIDENCE_LABEL,
+        }
+    return _finish_execution(
+        {"id": execution_id, "agenda_id": row["agenda_id"], "lease_token": lease_token},
+        "succeeded",
+        result=result,
+    )
+
+
+def cancel_request_hash(kind: str, target_id: str, reason: str | None) -> str:
+    raw = json.dumps(
+        {"reason": reason, "target_id": target_id, "target_kind": kind},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _cancel_reply(
+    status_value: str,
+    *,
+    error: str | None = None,
+    cancellation_id: str | None = None,
+    target_kind: str | None = None,
+    target_id: str | None = None,
+) -> dict[str, Any]:
+    body: dict[str, Any] = {
+        "status": status_value,
+        "evidence_label": EVIDENCE_LABEL,
+    }
+    if error is not None:
+        body["error"] = error
+    if cancellation_id is not None:
+        body["cancellation_id"] = cancellation_id
+    if target_kind is not None:
+        body["target_kind"] = target_kind
+    if target_id is not None:
+        body["target_id"] = target_id
+    return body
+
+
+def _replay_cancellation(existing: sqlite3.Row, digest: str) -> dict[str, Any]:
+    if existing["request_hash"] != digest:
+        return _cancel_reply(
+            "conflict",
+            error="idempotency_key_reused_with_different_request",
+            cancellation_id=existing["id"],
+            target_kind=existing["target_kind"],
+            target_id=existing["target_id"],
+        )
+    return _cancel_reply(
+        "duplicate",
+        cancellation_id=existing["id"],
+        target_kind=existing["target_kind"],
+        target_id=existing["target_id"],
+    )
+
+
+def cancel_target(
+    kind: str,
+    target_id: str,
+    idempotency_key: str,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    """Cancel an agenda item or one execution.
+
+    The same key and request replays the recorded cancellation and does not
+    append another event. A different request with that key conflicts. The
+    cancellation row and the hash-chained event commit together.
+    """
+    if kind not in ("agenda", "execution"):
+        return _cancel_reply("refused", error="invalid_target_kind")
+    if not idempotency_key:
+        return _cancel_reply("refused", error="idempotency_key_required")
+    digest = cancel_request_hash(kind, target_id, reason)
+    db = connect()
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        existing = db.execute(
+            "SELECT * FROM cancellations WHERE idempotency_key=?",
+            (idempotency_key,),
+        ).fetchone()
+        if existing is not None:
+            db.rollback()
+            return _replay_cancellation(existing, digest)
+        if kind == "agenda":
+            outcome = _cancel_agenda(db, target_id, idempotency_key, reason, digest)
+        else:
+            outcome = _cancel_execution(db, target_id, idempotency_key, reason, digest)
+        if outcome["status"] == "cancelled":
+            db.commit()
+        else:
+            db.rollback()
+        return outcome
+    except sqlite3.IntegrityError:
+        existing = db.execute(
+            "SELECT * FROM cancellations WHERE idempotency_key=?",
+            (idempotency_key,),
+        ).fetchone()
+        db.rollback()
+        if existing is None:
+            raise
+        return _replay_cancellation(existing, digest)
+    except Exception:
+        try:
+            db.execute("ROLLBACK")
+        except sqlite3.DatabaseError:
+            pass
+        raise
+    finally:
+        db.close()
+
+
+def _cancel_agenda(
+    db: sqlite3.Connection,
+    target_id: str,
+    idempotency_key: str,
+    reason: str | None,
+    digest: str,
+) -> dict[str, Any]:
+    agenda = db.execute("SELECT * FROM agenda WHERE id=?", (target_id,)).fetchone()
+    if agenda is None:
+        return _cancel_reply("not_found", error="agenda_not_found", target_kind="agenda", target_id=target_id)
+    if agenda["status"] == "complete":
+        return _cancel_reply(
+            "not_cancellable",
+            error="agenda_already_complete",
+            target_kind="agenda",
+            target_id=target_id,
+        )
+    if agenda["cancelled_at"] is not None or agenda["status"] == "cancelled":
+        return _cancel_reply("already_cancelled", target_kind="agenda", target_id=target_id)
+    ts = now()
+    cid = str(uuid.uuid4())
+    db.execute(
+        """
+        INSERT INTO cancellations
+        (id,idempotency_key,request_hash,target_kind,target_id,reason,created)
+        VALUES (?,?,?,?,?,?,?)
+        """,
+        (cid, idempotency_key, digest, "agenda", target_id, reason, ts),
+    )
+    changed = db.execute(
+        """
+        UPDATE agenda SET status='cancelled', cancelled_at=?, updated=?
+        WHERE id=? AND status!='complete' AND cancelled_at IS NULL
+        """,
+        (ts, ts, target_id),
+    ).rowcount
+    if changed != 1:
+        return _cancel_reply("not_cancellable", error="agenda_not_cancellable", target_kind="agenda", target_id=target_id)
+    rows = db.execute(
+        """
+        SELECT id FROM executions
+        WHERE agenda_id=? AND status IN ('running','interrupted','failed')
+        ORDER BY id
+        """,
+        (target_id,),
+    ).fetchall()
+    execution_ids = [row["id"] for row in rows]
+    if execution_ids:
+        db.execute(
+            """
+            UPDATE executions SET status='cancelled', cancelled_at=?
+            WHERE agenda_id=? AND status IN ('running','interrupted','failed')
+            """,
+            (ts, target_id),
+        )
+    _append_event(db, "agenda.cancelled", {
+        "agenda_id": target_id,
+        "cancellation_id": cid,
+        "execution_ids": execution_ids,
+        "idempotency_key": idempotency_key,
+        "reason": reason,
+        "target_kind": "agenda",
+    })
+    return _cancel_reply(
+        "cancelled",
+        cancellation_id=cid,
+        target_kind="agenda",
+        target_id=target_id,
+    )
+
+
+def _cancel_execution(
+    db: sqlite3.Connection,
+    target_id: str,
+    idempotency_key: str,
+    reason: str | None,
+    digest: str,
+) -> dict[str, Any]:
+    row = db.execute(
+        """
+        SELECT e.id, e.status, e.cancelled_at, e.agenda_id, a.status AS agenda_status
+        FROM executions e JOIN agenda a ON a.id=e.agenda_id
+        WHERE e.id=?
+        """,
+        (target_id,),
+    ).fetchone()
+    if row is None:
+        return _cancel_reply(
+            "not_found", error="execution_not_found", target_kind="execution", target_id=target_id
+        )
+    if row["status"] == "succeeded" or row["agenda_status"] == "complete":
+        return _cancel_reply(
+            "not_cancellable",
+            error="execution_already_committed",
+            target_kind="execution",
+            target_id=target_id,
+        )
+    if row["cancelled_at"] is not None or row["status"] == "cancelled":
+        return _cancel_reply("already_cancelled", target_kind="execution", target_id=target_id)
+    ts = now()
+    cid = str(uuid.uuid4())
+    db.execute(
+        """
+        INSERT INTO cancellations
+        (id,idempotency_key,request_hash,target_kind,target_id,reason,created)
+        VALUES (?,?,?,?,?,?,?)
+        """,
+        (cid, idempotency_key, digest, "execution", target_id, reason, ts),
+    )
+    changed = db.execute(
+        """
+        UPDATE executions SET status='cancelled', cancelled_at=?
+        WHERE id=? AND status!='succeeded' AND cancelled_at IS NULL
+        """,
+        (ts, target_id),
+    ).rowcount
+    if changed != 1:
+        return _cancel_reply(
+            "not_cancellable",
+            error="execution_not_cancellable",
+            target_kind="execution",
+            target_id=target_id,
+        )
+    if row["agenda_status"] == "running":
+        db.execute(
+            """
+            UPDATE agenda SET status='blocked', updated=?
+            WHERE id=? AND status='running' AND cancelled_at IS NULL
+            """,
+            (ts, row["agenda_id"]),
+        )
+    _append_event(db, "execution.cancelled", {
+        "agenda_id": row["agenda_id"],
+        "cancellation_id": cid,
+        "execution_id": target_id,
+        "idempotency_key": idempotency_key,
+        "reason": reason,
+        "target_kind": "execution",
+    })
+    return _cancel_reply(
+        "cancelled",
+        cancellation_id=cid,
+        target_kind="execution",
+        target_id=target_id,
+    )
 
 
 def recover_interrupted() -> dict[str, Any]:
@@ -2093,11 +2777,14 @@ def verify_events() -> dict[str, Any]:
 
 def attempt_stale_complete(execution_id: str, token: str) -> dict[str, Any]:
     with connect() as db:
-        row = db.execute(
-            "SELECT status, lease_token FROM executions WHERE id=?",
-            (execution_id,),
-        ).fetchone()
-        if row is None or row["lease_token"] != token or row["status"] != "running":
+        row = _execution_fence_row(db, execution_id)
+        if _is_cancel_fenced(row):
+            return {
+                "accepted": False,
+                "reason": "cancelled",
+                "evidence_label": EVIDENCE_LABEL,
+            }
+        if row is None or row["lease_token"] != token or row["execution_status"] != "running":
             return {
                 "accepted": False,
                 "reason": "stale_fence",
@@ -2136,17 +2823,61 @@ def _parse_goal(argv: list[str]) -> tuple[str | None, str]:
 # CLI
 # ---------------------------------------------------------------------------
 
+def _parse_cancel(argv: list[str]) -> dict[str, Any]:
+    args = argv[2:]
+    key = None
+    reason_parts: list[str] | None = None
+    kind = None
+    target = None
+    index = 0
+    while index < len(args):
+        item = args[index]
+        if item == "--key":
+            if index + 1 >= len(args):
+                raise SystemExit("cancel --key requires a value")
+            key = args[index + 1]
+            index += 2
+            continue
+        if item == "--reason":
+            index += 1
+            reason_parts = []
+            while index < len(args) and args[index] not in ("agenda", "execution"):
+                reason_parts.append(args[index])
+                index += 1
+            continue
+        if item in ("agenda", "execution"):
+            if index + 1 >= len(args):
+                raise SystemExit("cancel requires a target id")
+            kind = item
+            target = args[index + 1]
+            index += 2
+            continue
+        raise SystemExit(
+            "cancel usage: cancel --key KEY [--reason TEXT] agenda|execution ID"
+        )
+    if not key or not kind or not target:
+        raise SystemExit(
+            "cancel usage: cancel --key KEY [--reason TEXT] agenda|execution ID"
+        )
+    reason = None if reason_parts is None else " ".join(reason_parts).strip()
+    return cancel_target(kind, target, key, reason)
+
+
 def main() -> None:
+    argv = sys.argv
+    if len(argv) >= 2 and argv[1] == "migrate":
+        outcome = migrate_schema()
+        print(json.dumps(outcome, indent=2, sort_keys=True))
+        return
     init()
-    argv = os.sys.argv
 
     if len(argv) < 2:
         print(
             "LeQutis commands: init | status | heartbeat | remember | goal | "
             "loop | run-once | recover | retry | verify | verify-events | "
-            "verify-independent | unfinished | complete | daemon | sources | "
-            "assimilate | ingest | search | gates | seed-gates | skills | "
-            "parity"
+            "verify-independent | unfinished | complete | commit | claim | "
+            "cancel | migrate | daemon | sources | assimilate | ingest | "
+            "search | gates | seed-gates | skills | parity"
         )
         return
 
@@ -2189,7 +2920,7 @@ def main() -> None:
     elif cmd == "run-once":
         result = run_once()
         print(json.dumps(result, indent=2))
-        if result["status"] == "failed":
+        if result["status"] in ("failed", "cancelled"):
             raise SystemExit(1)
 
     elif cmd == "recover":
@@ -2203,7 +2934,10 @@ def main() -> None:
         print("AGENDA ITEM REOPENED")
 
     elif cmd == "verify":
-        print(json.dumps(verify_event_chain(), indent=2))
+        result = verify_event_chain()
+        print(json.dumps(result, indent=2))
+        if not result.get("ok"):
+            raise SystemExit(1)
 
     elif cmd == "verify-events":
         result = verify_events()
@@ -2216,6 +2950,35 @@ def main() -> None:
             raise SystemExit("complete requires an execution id and a lease token")
         print(json.dumps(attempt_stale_complete(argv[2], argv[3]), sort_keys=True))
         raise SystemExit(1)
+
+    elif cmd == "claim":
+        agenda_id = argv[2] if len(argv) > 2 else None
+        outcome = claim_proposal(agenda_id)
+        print(json.dumps(outcome, sort_keys=True))
+        if outcome.get("status") == "refused":
+            raise SystemExit(1)
+
+    elif cmd == "commit":
+        if len(argv) != 5:
+            raise SystemExit("commit requires an execution id, a lease token, and result JSON")
+        try:
+            parsed = json.loads(argv[4])
+        except json.JSONDecodeError as exc:
+            raise SystemExit("commit result must be JSON") from exc
+        if not isinstance(parsed, dict):
+            raise SystemExit("commit result must be a JSON object")
+        outcome = commit_result(
+            argv[2], argv[3], json.dumps(parsed, sort_keys=True, separators=(",", ":"))
+        )
+        print(json.dumps(outcome, sort_keys=True))
+        if not outcome.get("accepted"):
+            raise SystemExit(1)
+
+    elif cmd == "cancel":
+        outcome = _parse_cancel(argv)
+        print(json.dumps(outcome, sort_keys=True))
+        if outcome["status"] in ("conflict", "not_found", "not_cancellable", "refused"):
+            raise SystemExit(1)
 
     elif cmd == "daemon":
         interval = int(argv[2]) if len(argv) > 2 else 60
