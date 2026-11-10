@@ -1,0 +1,41 @@
+name: LeQutis disposable sovereign-loop evidence gate
+on:
+  pull_request:
+    paths:
+      - 'core/**'
+      - 'tests/**'
+      - '.github/workflows/lequtis-disposable-gate.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  sovereign-loop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      LEQUTIS_WORKER: deterministic
+    steps:
+      - name: Checkout exact proposed commit
+        uses: actions/checkout@v4
+      - name: Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Compile real kernel
+        run: python -m py_compile core/lequtis.py core/workers.py core/skills.py core/verifier.py core/access_parity.py
+      - name: Disposable integration suite against canonical kernel
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          printf '%s\n' "${GITHUB_SHA}" > evidence/commit.txt
+          bash doctor.sh 2>&1 | tee evidence/doctor.log
+          python3 tests/test_hermes_receipt_contract.py 2>&1 | tee evidence/hermes-contract.log
+      - name: Preserve receipts even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lequtis-disposable-gate-${{ github.sha }}
+          path: evidence/
+          if-no-files-found: warn
