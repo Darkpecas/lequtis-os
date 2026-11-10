@@ -182,11 +182,17 @@ class ExecutionIntegrationTests(unittest.TestCase):
         self.run_cli("goal", "remember: create auditable events")
         self.run_cli("run-once")
         with sqlite3.connect(self.db_path) as db:
+            # The append-only trigger blocks ordinary edits; simulate an
+            # attacker with raw file access by removing it first.
+            db.execute("DROP TRIGGER IF EXISTS events_append_only_no_update")
             db.execute("UPDATE events SET payload='{}' WHERE seq=1")
 
         result = json.loads(self.run_cli("verify-events", expected=1).stdout)
         self.assertFalse(result["valid"])
         self.assertEqual(result["invalid_sequence"], 1)
+        verify = json.loads(self.run_cli("verify", expected=1).stdout)
+        self.assertFalse(verify["ok"])
+        self.assertEqual(verify["broken_at"], 1)
 
 
 if __name__ == "__main__":
