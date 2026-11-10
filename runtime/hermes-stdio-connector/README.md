@@ -36,7 +36,9 @@ No web/HTTP authentication, transport, host deployment or live route is added.
 
 The write gate opens only the existing kernel database selected by `LEQUTIS_DB`
 or `$LEQUTIS_STATE/lequtis.db`, using SQLite `mode=rw`. It refuses missing,
-non-WAL or incompatible databases and never initializes or migrates one.
+symlinked, non-WAL or incompatible database paths and never initializes or
+migrates one. The symlink check is performed before opening; concurrent path
+replacement is not covered by this guard.
 It validates fields and the existing event chain, then uses one
 `BEGIN IMMEDIATE` transaction to persist:
 
