@@ -1,0 +1,16 @@
+TEST A: happy path autonomous loop
+  PASS
+TEST B: failure capture and recoverable agenda
+  PASS
+TEST C: restart persistence and idempotent replay
+  PASS
+TEST D: cryptographic event chain integrity
+  PASS
+TEST CLI: disposable subprocess loop
+  PASS
+TEST E: knowledge source registry + local assimilate
+  PASS
+TEST F: inbox ingest + LIVE LOOP gate seeding
+  PASS
+
+=== LEQUTIS AUTONOMOUS LOOP TESTS: ALL PASS ===

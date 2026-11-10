@@ -1859,9 +1859,21 @@ def _semantic_for_execution(content: str, agenda_id: str) -> str:
 
 
 def _experience_for_execution(content: str, agenda_id: str) -> str:
-    mid = str(uuid.uuid4())
+    """Reuse learning if a process dies before its terminal result commits."""
+    mid = str(uuid.uuid5(uuid.NAMESPACE_URL, "lequtis:run-once-experience:" + agenda_id))
     ts = now()
     with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute(
+            "SELECT kind, content FROM memory WHERE id=?", (mid,)
+        ).fetchone()
+        if row is not None:
+            if row["kind"] != "experience" or row["content"] != content:
+                raise RuntimeError("Experience memory key conflicts with stored content")
+            _append_event(db, "memory.reused", {
+                "id": mid, "kind": "experience", "agenda_id": agenda_id,
+            })
+            return mid
         db.execute(
             """
             INSERT INTO memory(id,kind,content,created,updated)
@@ -1869,10 +1881,9 @@ def _experience_for_execution(content: str, agenda_id: str) -> str:
             """,
             (mid, "experience", content, ts, ts),
         )
-    event(
-        "memory.created",
-        {"id": mid, "kind": "experience", "agenda_id": agenda_id},
-    )
+        _append_event(db, "memory.created", {
+            "id": mid, "kind": "experience", "agenda_id": agenda_id,
+        })
     return mid
 
 
