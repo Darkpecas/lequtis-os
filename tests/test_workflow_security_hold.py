@@ -39,6 +39,8 @@ class WorkflowSecurityHoldTests(unittest.TestCase):
 
     def test_reviewer_executes_trusted_base_not_pr_head(self):
         source = self.read_workflow("lequtis-independent-review.yml")
+        self.assertIn("  pull_request_target:", source)
+        self.assertNotIn("  pull_request:", source)
         self.assertIn("ref: ${{ github.event.pull_request.base.sha }}", source)
         self.assertIn('git diff "HEAD...${HEAD_SHA}"', source)
         self.assertNotIn("ref: ${{ github.event.pull_request.head.sha }}", source)
