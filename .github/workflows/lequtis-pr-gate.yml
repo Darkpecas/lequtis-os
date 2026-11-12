@@ -1,0 +1,131 @@
+name: LeQutis PR gate
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      LEQUTIS_WORKER: deterministic
+      LEQUTIS_HERMES_QUERY: ""
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Tests with one bounded retry
+        id: tests
+        shell: bash
+        run: |
+          set +e
+          python3 -m unittest discover -s tests -p 'test_*.py' -q
+          code=$?
+          attempts=1
+          if [ "$code" -ne 0 ]; then
+            echo "first test attempt failed; retrying once"
+            python3 -m unittest discover -s tests -p 'test_*.py' -q
+            code=$?
+            attempts=2
+          fi
+          echo "attempts=$attempts" >> "$GITHUB_OUTPUT"
+          echo "passed=$([ "$code" -eq 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          exit "$code"
+      - name: Wait for the independent Codex review
+        id: review
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          status=missing
+          for _ in 1 2 3 4 5 6 7 8; do
+            comments=$(gh api "repos/${REPO}/pulls/${PR}/comments" --jq '[.[] | select(.user.login=="chatgpt-codex-connector[bot]") | .body] | join("\n")')
+            reviews=$(gh api "repos/${REPO}/pulls/${PR}/reviews" --jq '[.[] | select(.user.login=="chatgpt-codex-connector[bot]")] | length')
+            if printf '%s' "$comments" | grep -q 'codex-code-review-finding'; then
+              status=findings
+              break
+            fi
+            if [ "$reviews" != "0" ]; then
+              status=pass
+              break
+            fi
+            sleep 30
+          done
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+      - name: Decide
+        id: decide
+        if: always()
+        shell: bash
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set +e
+          git fetch origin "${{ github.base_ref }}"
+          printf '%s' "$PR_BODY" > /tmp/pr-body.md
+          mkdir -p evidence
+          python3 integrations/pr_gate.py \
+            --base "origin/${{ github.base_ref }}" \
+            --head HEAD \
+            --body-file /tmp/pr-body.md \
+            --tests-passed "${{ steps.tests.outputs.passed }}" \
+            --ai-review "${{ steps.review.outputs.status }}" \
+            --test-attempts "${{ steps.tests.outputs.attempts }}" \
+            --out evidence/pr-gate-receipt.json
+          code=$?
+          echo "exit=$code" >> "$GITHUB_OUTPUT"
+          merge=$(python3 -c 'import json; print("true" if json.load(open("evidence/pr-gate-receipt.json", encoding="utf-8"))["merge_allowed"] else "false")')
+          echo "merge=$merge" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Post the receipt
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          python3 - <<'PY' > /tmp/pr-gate-comment.md
+          import json
+          verdict = json.load(open("evidence/pr-gate-receipt.json", encoding="utf-8"))
+          print("LeQutis PR gate")
+          print()
+          print(verdict["evidence_label"])
+          print()
+          print("merge_allowed:", verdict["merge_allowed"])
+          print("blocking:", ", ".join(verdict["blocking"]) or "none")
+          print("ai_review:", verdict["ai_review"])
+          print("tests_passed:", verdict["tests_passed"])
+          print("test_attempts:", verdict["test_attempts"])
+          print("live_hermes: false")
+          print("live_hostinger: false")
+          print()
+          print("```json")
+          print(json.dumps(verdict, indent=2, sort_keys=True))
+          print("```")
+          PY
+          gh pr comment "$PR" --repo "$REPO" --body-file /tmp/pr-gate-comment.md
+      - name: Merge only a qualifying harmless change
+        if: steps.decide.outputs.merge == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh pr merge "$PR" --repo "$REPO" --squash
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr-gate-${{ github.sha }}
+          path: evidence/pr-gate-receipt.json
+          if-no-files-found: warn
