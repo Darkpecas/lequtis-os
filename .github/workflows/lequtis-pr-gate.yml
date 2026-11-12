@@ -88,41 +88,18 @@ jobs:
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          set -euo pipefail
+          set +e
           status=missing
           for _ in 1 2 3 4 5 6 7 8; do
-            # Only accept review state for the current PR head SHA.
-            summary=$(gh api "repos/${REPO}/issues/${PR}/comments" --jq \
-              --arg sha "$HEAD_SHA" \
-              '[.[] | select(.user.login=="chatgpt-codex-connector[bot]") | select(.body|contains($sha)) | .body] | join("\n")')
-            findings=$(gh api "repos/${REPO}/pulls/${PR}/comments" --jq \
-              --arg sha "$HEAD_SHA" \
-              '[.[] | select(.user.login=="chatgpt-codex-connector[bot]") | select(.original_commit_id==$sha or .commit_id==$sha) | .body] | join("\n")')
-            reviews=$(gh api "repos/${REPO}/pulls/${PR}/reviews" --jq \
-              --arg sha "$HEAD_SHA" \
-              '[.[] | select(.user.login=="chatgpt-codex-connector[bot]") | select(.commit_id==$sha)] | length')
-            all_text=$(printf '%s\n%s' "$summary" "$findings")
-            if printf '%s' "$all_text" | grep -q 'codex-code-review-finding'; then
-              status=findings
-              break
-            fi
-            if printf '%s' "$summary" | grep -q 'codex-review-state:v1' \
-              && printf '%s' "$summary" | grep -q "\"commit_sha\":\"${HEAD_SHA}\"" \
-              && printf '%s' "$summary" | grep -q '"status":"completed"'; then
-              if printf '%s' "$summary" | grep -q '"has_any_findings":true'; then
-                status=findings
-              else
-                status=pass
-              fi
-              break
-            fi
-            if [ "$reviews" != "0" ] && ! printf '%s' "$all_text" | grep -q 'codex-code-review-finding'; then
-              status=pass
+            status=$(python3 integrations/codex_review_status.py \
+              --repo "$REPO" --pr "$PR" --head-sha "$HEAD_SHA" | tr -d '\r')
+            if [ "$status" = "pass" ] || [ "$status" = "findings" ]; then
               break
             fi
             sleep 30
           done
-          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "status=${status:-missing}" >> "$GITHUB_OUTPUT"
+          exit 0
       - name: Decide
         id: decide
         if: always()
@@ -134,39 +111,62 @@ jobs:
           git fetch origin "${{ github.base_ref }}"
           printf '%s' "$PR_BODY" > /tmp/pr-body.md
           mkdir -p evidence
+          AI_REVIEW="${{ steps.review.outputs.status }}"
+          STATIC="${{ steps.static.outputs.status }}"
+          TESTS="${{ steps.tests.outputs.passed }}"
+          ATTEMPTS="${{ steps.tests.outputs.attempts }}"
           python3 integrations/pr_gate.py \
             --base "origin/${{ github.base_ref }}" \
             --head HEAD \
             --body-file /tmp/pr-body.md \
-            --tests-passed "${{ steps.tests.outputs.passed }}" \
-            --ai-review "${{ steps.review.outputs.status }}" \
-            --static-audit "${{ steps.static.outputs.status }}" \
-            --test-attempts "${{ steps.tests.outputs.attempts }}" \
+            --tests-passed "${TESTS:-false}" \
+            --ai-review "${AI_REVIEW:-missing}" \
+            --static-audit "${STATIC:-findings}" \
+            --test-attempts "${ATTEMPTS:-1}" \
             --out evidence/pr-gate-receipt.json
           code=$?
           echo "exit=$code" >> "$GITHUB_OUTPUT"
-          merge=$(python3 -c 'import json; print("true" if json.load(open("evidence/pr-gate-receipt.json", encoding="utf-8"))["merge_allowed"] else "false")')
+          if [ -f evidence/pr-gate-receipt.json ]; then
+            merge=$(python3 -c 'import json; print("true" if json.load(open("evidence/pr-gate-receipt.json", encoding="utf-8"))["merge_allowed"] else "false")')
+          else
+            merge=false
+          fi
           echo "merge=$merge" >> "$GITHUB_OUTPUT"
           exit 0
       - name: Record engineering workflow receipt
         if: always()
         shell: bash
         run: |
+          set +e
+          MERGE="${{ steps.decide.outputs.merge }}"
+          AI_REVIEW="${{ steps.review.outputs.status }}"
+          TESTS="${{ steps.tests.outputs.passed }}"
+          ATTEMPTS="${{ steps.tests.outputs.attempts }}"
+          mkdir -p evidence
+          GATE_ARGS=()
+          STATIC_ARGS=()
+          if [ -f evidence/pr-gate-receipt.json ]; then
+            GATE_ARGS=(--gate-file evidence/pr-gate-receipt.json)
+          fi
+          if [ -f evidence/pr-static-audit.json ]; then
+            STATIC_ARGS=(--static-audit-file evidence/pr-static-audit.json)
+          fi
           python3 integrations/engineering_workflow.py \
             --task-id "pr-${{ github.event.pull_request.number }}" \
             --pr-number "${{ github.event.pull_request.number }}" \
             --pr-url "${{ github.event.pull_request.html_url }}" \
             --head-sha "${{ github.event.pull_request.head.sha }}" \
             --base-ref "${{ github.base_ref }}" \
-            --gate-file evidence/pr-gate-receipt.json \
-            --static-audit-file evidence/pr-static-audit.json \
-            --ai-review "${{ steps.review.outputs.status }}" \
-            --tests-passed "${{ steps.tests.outputs.passed }}" \
-            --test-attempts "${{ steps.tests.outputs.attempts }}" \
-            --merge-attempted "${{ steps.decide.outputs.merge }}" \
-            --merge-result "$([ "${{ steps.decide.outputs.merge }}" = "true" ] && echo queued || echo refused)" \
+            "${GATE_ARGS[@]}" \
+            "${STATIC_ARGS[@]}" \
+            --ai-review "${AI_REVIEW:-missing}" \
+            --tests-passed "${TESTS:-false}" \
+            --test-attempts "${ATTEMPTS:-1}" \
+            --merge-attempted "${MERGE:-false}" \
+            --merge-result "$([ "${MERGE:-false}" = "true" ] && echo queued || echo refused)" \
             --actions-run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             --out evidence/engineering-workflow-receipt.json
+          exit 0
       - name: Post the receipt
         if: always()
         shell: bash
@@ -175,23 +175,35 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
         run: |
+          set +e
           python3 - <<'PY' > /tmp/pr-gate-comment.md
           import json
           from pathlib import Path
-          verdict = json.load(open("evidence/pr-gate-receipt.json", encoding="utf-8"))
-          static = json.load(open("evidence/pr-static-audit.json", encoding="utf-8"))
-          workflow = json.load(open("evidence/engineering-workflow-receipt.json", encoding="utf-8"))
+
+          def load(path):
+              p = Path(path)
+              if not p.is_file():
+                  return {"missing": True, "path": path}
+              return json.loads(p.read_text(encoding="utf-8"))
+
+          verdict = load("evidence/pr-gate-receipt.json")
+          static = load("evidence/pr-static-audit.json")
+          workflow = load("evidence/engineering-workflow-receipt.json")
           print("LeQutis PR gate")
           print()
-          print(verdict["evidence_label"])
+          print(verdict.get("evidence_label", "LOCAL PROOF, NOT LIVE VPS VERIFIED"))
           print()
           print("authority: LeQutis (GitHub/Codex/Hermes/Telegram are subordinate)")
-          print("merge_allowed:", verdict["merge_allowed"])
-          print("blocking:", ", ".join(verdict["blocking"]) or "none")
-          print("ai_review:", verdict["ai_review"])
-          print("static_audit:", verdict.get("static_audit"), f"({len(static.get('findings') or [])} findings)")
-          print("tests_passed:", verdict["tests_passed"])
-          print("test_attempts:", verdict["test_attempts"])
+          print("merge_allowed:", verdict.get("merge_allowed"))
+          print("blocking:", ", ".join(verdict.get("blocking") or []) or "none")
+          print("ai_review:", verdict.get("ai_review"))
+          print(
+              "static_audit:",
+              verdict.get("static_audit"),
+              f"({len(static.get('findings') or [])} findings)",
+          )
+          print("tests_passed:", verdict.get("tests_passed"))
+          print("test_attempts:", verdict.get("test_attempts"))
           print("correlation_id:", workflow.get("correlation_id"))
           print("live_hermes: false")
           print("live_hostinger: false")
@@ -202,6 +214,7 @@ jobs:
           print("```")
           PY
           gh pr comment "$PR" --repo "$REPO" --body-file /tmp/pr-gate-comment.md
+          exit 0
       - name: Merge only a qualifying harmless change
         id: merge
         if: steps.decide.outputs.merge == 'true'
@@ -219,6 +232,10 @@ jobs:
         if: always() && steps.decide.outputs.merge == 'true'
         shell: bash
         run: |
+          set +e
+          AI_REVIEW="${{ steps.review.outputs.status }}"
+          TESTS="${{ steps.tests.outputs.passed }}"
+          ATTEMPTS="${{ steps.tests.outputs.attempts }}"
           python3 integrations/engineering_workflow.py \
             --task-id "pr-${{ github.event.pull_request.number }}" \
             --pr-number "${{ github.event.pull_request.number }}" \
@@ -227,13 +244,14 @@ jobs:
             --base-ref "${{ github.base_ref }}" \
             --gate-file evidence/pr-gate-receipt.json \
             --static-audit-file evidence/pr-static-audit.json \
-            --ai-review "${{ steps.review.outputs.status }}" \
-            --tests-passed "${{ steps.tests.outputs.passed }}" \
-            --test-attempts "${{ steps.tests.outputs.attempts }}" \
+            --ai-review "${AI_REVIEW:-missing}" \
+            --tests-passed "${TESTS:-false}" \
+            --test-attempts "${ATTEMPTS:-1}" \
             --merge-attempted true \
             --merge-result "${{ steps.merge.outputs.result || 'failed' }}" \
             --actions-run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             --out evidence/engineering-workflow-receipt.json
+          exit 0
       - uses: actions/upload-artifact@v4
         if: always()
         with:
