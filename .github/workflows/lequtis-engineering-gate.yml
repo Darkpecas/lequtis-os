@@ -12,7 +12,8 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
-      pull-requests: read
+      # Receipt comments and labels. Merging is a separate job.
+      pull-requests: write
       issues: write
     outputs:
       merge: ${{ steps.decide.outputs.merge }}

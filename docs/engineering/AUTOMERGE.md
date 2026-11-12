@@ -11,7 +11,7 @@ Only these jobs call `gh pr merge`:
 - `merge` in `.github/workflows/lequtis-pr-gate.yml`
 - `merge` in `.github/workflows/lequtis-engineering-gate.yml`
 
-Each job is skipped unless `vars.LEQUTIS_AUTOMERGE_ENABLED == 'true'`. The shell step also exits when that value is not `true`. The `contents: write` and `pull-requests: write` permissions used for merging sit on those jobs, so they are not granted while the jobs are skipped. The jobs that run the checks can still comment and label.
+Each job is skipped unless `vars.LEQUTIS_AUTOMERGE_ENABLED == 'true'`. The shell step also exits when that value is not `true`. Those merge jobs are the only ones with `contents: write` for merging, and that permission is not granted while the jobs are skipped. The repair job still has `contents: write` so it can push a fix commit. It does not merge. The jobs that post receipts keep `pull-requests: write` because GitHub uses that permission for pull-request comments. Those jobs do not call `gh pr merge`.
 
 ## Re-enable
 

@@ -5,7 +5,8 @@ on:
 permissions:
   contents: read
   issues: write
-  pull-requests: read
+  # Receipt comments use the pull-request API. Merging is a separate job.
+  pull-requests: write
   checks: read
   statuses: read
 jobs:
