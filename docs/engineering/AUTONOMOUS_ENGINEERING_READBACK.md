@@ -38,7 +38,7 @@ BUILD → PR → INDEPENDENT CODEX REVIEW → TESTS → GATE → AUTO-MERGE → 
 - `Darkpecas/.git22#4`: repository 404; no recoverable commits
 - Canonical `Darkpecas/lequtis-os#4`: merged real port (+4462/−371); already on `main`
 - Empty-PR pattern: `#13` / `#33` — refused by gate as `empty_pr`
-- Receipt: `evidence/pr4-investigation-2026-11-12/RECEIPT.md`
+- Receipt: `docs/engineering/PR4_INVESTIGATION.md`
 
 ## Telegram / Hermes
 
