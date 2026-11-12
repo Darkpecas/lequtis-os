@@ -57,13 +57,13 @@ class PrGateTests(unittest.TestCase):
         self.assertIn("DROP TABLE", destructive["destructive"])
         self.assertFalse(destructive["merge_allowed"])
         listed_only = decide(
-            files=["docs/note.md"],
-            diff_text="+++ b/docs/note.md\n+DESTRUCTIVE_MARKERS = (\"DROP TABLE\",)\n",
+            files=["integrations/pr_gate.py"],
+            diff_text="+++ b/integrations/pr_gate.py\n+DESTRUCTIVE_MARKERS = (\"DROP TABLE\",)\n",
             tests_passed=True,
             ai_review="pass",
             duplicate=False,
         )
-        self.assertIn("DROP TABLE", listed_only["destructive"])
+        self.assertEqual(listed_only["destructive"], [])
         context_only = decide(
             files=["docs/note.md"],
             diff_text="+++ b/docs/note.md\n-DROP TABLE events;\n+safe text\n",
