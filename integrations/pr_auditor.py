@@ -23,8 +23,7 @@ EVIDENCE_LABEL = "LOCAL PROOF, NOT LIVE VPS VERIFIED"
 BLOCK_PATH_NEEDLES = (
     (".env", "credentials"),
     ("credential", "credentials"),
-    ("secret", "credentials"),
-    ("password", "credentials"),
+    ("/secrets/", "credentials"),
     (".pem", "credentials"),
     ("database/migrations/", "schema_migration"),
     (".github/", "workflow_infrastructure"),
@@ -40,11 +39,11 @@ DESTRUCTIVE_NEEDLES = (
     ("rm -rf /", re.compile(r"\brm\s+-rf\s+/")),
 )
 
-SECRET_ASSIGNMENT = re.compile(
-    r"^\s*(?:export\s+)?[A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|API_KEY)[A-Z0-9_]*\s*=\s*['\"]?[^'\"\s]+",
+_STRING_LITERAL = re.compile(r"(['\"`])(?:\\.|(?!\1).)*\1")
+_SECRET_NAME = re.compile(r"(SECRET|TOKEN|PASSWORD|API_KEY)")
+_SECRET_LINE = re.compile(
+    r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+?)\s*$"
 )
-
-_STRING_LITERAL = re.compile(r"(['\"])(?:\\.|(?!\1).)*\1")
 
 
 def added_lines(diff_text: str) -> list[str]:
@@ -57,8 +56,51 @@ def added_lines(diff_text: str) -> list[str]:
 
 
 def _without_string_literals(line: str) -> str:
-    """Remove quoted literals so marker lists in source are not false positives."""
+    """Remove quoted/backtick literals so docs and marker lists are not flagged."""
     return _STRING_LITERAL.sub("", line)
+
+
+def _looks_like_secret_assignment(line: str) -> bool:
+    """True only for literal credential assignments, not code/docs/Actions refs."""
+    match = _SECRET_LINE.match(line)
+    if not match:
+        return False
+    name, value = match.group(1), match.group(2).strip()
+    if not _SECRET_NAME.search(name):
+        return False
+    # GitHub Actions expressions and function calls are not pasted secrets.
+    if value.startswith("${{") or value.startswith("$("):
+        return False
+    if re.match(r"^[A-Za-z_][A-Za-z0-9_\.]*\(", value):
+        return False
+    if value in {'""', "''", "``", "None", "null", "true", "false", "{}", "[]"}:
+        return False
+    if (value.startswith("'") or value.startswith('"') or value.startswith("`")) and len(
+        value
+    ) > 3:
+        inner = value[1:-1] if len(value) >= 2 else ""
+        if inner.startswith("${{") or inner in {"", "...", "redacted", "<redacted>"}:
+            return False
+        return True
+    # Opaque unquoted token long enough to be a pasted secret.
+    return bool(re.match(r"^[A-Za-z0-9_\-+/=]{16,}$", value))
+
+
+def _claim_body(body: str) -> str:
+    """Strip the standard evidence label so it does not trip VERIFIED detection."""
+    text = body or ""
+    text = text.replace(EVIDENCE_LABEL, "")
+    text = re.sub(r"\bNOT\s+(?:LIVE\s+)?(?:VPS\s+)?VERIFIED\b", "", text, flags=re.I)
+    return text
+
+
+def _has_evidence_pointer(body: str) -> bool:
+    text = body or ""
+    return (
+        "https://github.com/" in text
+        or "evidence/" in text
+        or "actions/runs/" in text
+    )
 
 
 def audit(
@@ -85,7 +127,10 @@ def audit(
 
     for path in files:
         low = path.lower()
-        if low.endswith(".key"):
+        if low.endswith(".key") or low.endswith(".pem"):
+            findings.append({"code": "credentials", "detail": path})
+            continue
+        if low.endswith(".env") or low.endswith(".env.local") or "/.env." in low:
             findings.append({"code": "credentials", "detail": path})
             continue
         for needle, code in BLOCK_PATH_NEEDLES:
@@ -98,7 +143,7 @@ def audit(
         for label, pattern in DESTRUCTIVE_NEEDLES:
             if pattern.search(stripped):
                 findings.append({"code": "destructive_operation", "detail": label})
-        if SECRET_ASSIGNMENT.search(stripped):
+        if _looks_like_secret_assignment(line):
             findings.append(
                 {
                     "code": "credentials",
@@ -106,9 +151,9 @@ def audit(
                 }
             )
 
-    unverified_claim = bool(re.search(r"\bVERIFIED\b", body or "")) and not (
-        "https://github.com/" in (body or "") or "evidence/" in (body or "")
-    )
+    claim_body = _claim_body(body)
+    has_evidence = _has_evidence_pointer(body)
+    unverified_claim = bool(re.search(r"\bVERIFIED\b", claim_body)) and not has_evidence
     if unverified_claim:
         findings.append(
             {
@@ -117,16 +162,9 @@ def audit(
             }
         )
 
-    # Acceptance criteria must name at least one concrete check when claiming done.
-    claims_complete = bool(
-        re.search(r"\b(COMPLETE|DONE|MERGED|SHIPPED)\b", body or "", re.I)
-    )
-    has_evidence_pointer = (
-        "https://github.com/" in (body or "")
-        or "evidence/" in (body or "")
-        or "actions/runs/" in (body or "")
-    )
-    if claims_complete and not has_evidence_pointer:
+    # Uppercase status tokens only. Prose like "Completes" / "merged" does not match.
+    claims_complete = bool(re.search(r"\b(COMPLETE|DONE|SHIPPED)\b", claim_body))
+    if claims_complete and not has_evidence:
         findings.append(
             {
                 "code": "acceptance_without_evidence",

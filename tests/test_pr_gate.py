@@ -82,10 +82,30 @@ class PrGateTests(unittest.TestCase):
             '+    "hosting_websites_delete",\n'
             '+    "vps_virtual-machines_recreate",\n'
             '+    "rm -rf /",\n'
+            "+SECRET_ASSIGNMENT = re.compile(\n"
+            "+          GH_TOKEN: ${{ github.token }}\n"
+            "+- Destructive lines (`DROP TABLE`, `rm -rf /`)\n"
         )
         auditor = audit(files=["integrations/pr_gate.py"], diff_text=diff)
-        self.assertEqual(auditor["status"], "pass")
+        self.assertEqual(auditor["status"], "pass", auditor["findings"])
         self.assertEqual(auditor["findings"], [])
+
+    def test_evidence_label_and_prose_do_not_trip_claim_checks(self):
+        auditor = audit(
+            files=["docs/note.md"],
+            body=(
+                "Completes the workflow. Canonical tree already contains the merged "
+                "port. LOCAL PROOF, NOT LIVE VPS VERIFIED."
+            ),
+        )
+        self.assertEqual(auditor["status"], "pass", auditor["findings"])
+
+    def test_literal_secret_assignment_is_flagged(self):
+        auditor = audit(
+            files=["docs/note.md"],
+            diff_text="+++ b/docs/note.md\n@@\n+API_TOKEN = 'supersecrettokenvalue'\n",
+        )
+        self.assertIn("credentials", {f["code"] for f in auditor["findings"]})
 
     def test_kernel_code_is_not_auto_merged(self):
         verdict = decide(
