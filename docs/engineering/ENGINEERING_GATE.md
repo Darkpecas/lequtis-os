@@ -30,7 +30,7 @@ Unverified infrastructure is held the same way: `.github/`, the gate modules, th
 
 The required Actions secret is `LEQUTIS_REVIEWER_API_KEY`. If that secret is absent, the review fails closed, the check fails, and the gate does not merge. The comment names that secret. The value is never printed.
 
-Optional model settings, not secrets: `LEQUTIS_REVIEWER_API_URL` (default OpenAI-compatible chat completions) and `LEQUTIS_REVIEWER_MODEL` (default `gpt-4o-mini`).
+The default provider is Google Gemini's free tier, not a paid API. `LEQUTIS_REVIEWER_API_KEY` is sent only as the `x-goog-api-key` header to `generativelanguage.googleapis.com`. The default model is `gemini-3.8-flash`, whose input and output Google lists as free of charge on the free tier. `gemini-2.0-flash` is not the default. A non-Gemini URL is refused unless `LEQUTIS_REVIEWER_ALLOW_PAID=1`.
 
 ## Acceptance evidence
 

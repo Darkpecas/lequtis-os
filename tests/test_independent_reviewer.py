@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import unittest
+import urllib.parse
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -75,6 +76,32 @@ class IndependentReviewerTests(unittest.TestCase):
         failed = reviewer.review("+docs only\n", "- tests pass\n", transport=broken)
         self.assertEqual(failed["verdict"], "fail_closed")
         self.assertNotIn("reviewer-test-key", json.dumps(failed))
+
+    def test_default_provider_is_the_free_gemini_flash_model(self):
+        self.assertEqual(reviewer.DEFAULT_MODEL, "gemini-3.8-flash")
+        endpoint = reviewer.gemini_endpoint(reviewer.DEFAULT_MODEL)
+        self.assertEqual(urllib.parse.urlparse(endpoint).hostname, "generativelanguage.googleapis.com")
+        os.environ["LEQUTIS_REVIEWER_API_KEY"] = "gemini-test-key"
+        payload = {
+            "model": reviewer.DEFAULT_MODEL,
+            "messages": reviewer.outbound_messages(
+                reviewer.build_packet("+note\n", "- docs/note.md is added\n")
+            ),
+        }
+        body = reviewer.gemini_body(payload)
+        encoded = json.dumps(body)
+        self.assertNotIn("gemini-test-key", encoded)
+        self.assertNotIn("gemini-test-key", endpoint)
+        self.assertEqual(body["generationConfig"]["responseMimeType"], "application/json")
+        self.assertIn("DIFF:", body["contents"][0]["parts"][0]["text"])
+        with self.assertRaises(RuntimeError):
+            reviewer.resolve_endpoint(reviewer.DEFAULT_MODEL, "https://api.openai.com/v1/chat/completions")
+        os.environ["LEQUTIS_REVIEWER_ALLOW_PAID"] = "1"
+        try:
+            paid = reviewer.resolve_endpoint(reviewer.DEFAULT_MODEL, "https://api.openai.com/v1/chat/completions")
+        finally:
+            os.environ.pop("LEQUTIS_REVIEWER_ALLOW_PAID", None)
+        self.assertIn("api.openai.com", paid)
 
     def test_comment_is_not_an_approval(self):
         result = reviewer.review("", "")

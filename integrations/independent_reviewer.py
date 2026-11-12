@@ -14,13 +14,16 @@ import os
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any, Callable, Mapping
 
 SCHEMA = "lequtis.independent_review.v1"
 SECRET_NAME = "LEQUTIS_REVIEWER_API_KEY"
-DEFAULT_URL = "https://api.openai.com/v1/chat/completions"
-DEFAULT_MODEL = "gpt-4o-mini"
+GEMINI_HOST = "generativelanguage.googleapis.com"
+# Current free-tier Flash model. Google's pricing page lists its input and
+# output as free of charge. gemini-2.0-flash is no longer the free default.
+DEFAULT_MODEL = "gemini-3.8-flash"
 MAX_DIFF = 120000
 PACKET_KEYS = frozenset({"acceptance_criteria", "diff"})
 FAIL_CLOSED = (
@@ -38,6 +41,42 @@ SYSTEM = (
 )
 
 Transport = Callable[[str, dict[str, Any], dict[str, str]], dict[str, Any]]
+
+
+def gemini_endpoint(model: str) -> str:
+    return "https://" + GEMINI_HOST + "/v1beta/models/" + model + ":generateContent"
+
+
+def resolve_endpoint(model: str, url: str | None) -> str:
+    """Use the free Gemini endpoint unless a paid provider is explicitly opted in."""
+    chosen = (url or "").strip() or gemini_endpoint(model)
+    host = (urllib.parse.urlparse(chosen).hostname or "").lower()
+    if host != GEMINI_HOST:
+        if os.environ.get("LEQUTIS_REVIEWER_ALLOW_PAID") == "1":
+            return chosen
+        raise RuntimeError("paid_provider_refused")
+    if ":generateContent" not in chosen:
+        return gemini_endpoint(model)
+    return chosen
+
+
+def gemini_body(payload: dict[str, Any]) -> dict[str, Any]:
+    system = ""
+    user = ""
+    for message in payload.get("messages") or []:
+        role = message.get("role")
+        content = message.get("content") or ""
+        if role == "system":
+            system = content
+        elif role == "user":
+            user = content
+    body: dict[str, Any] = {
+        "contents": [{"role": "user", "parts": [{"text": user}]}],
+        "generationConfig": {"temperature": 0, "responseMimeType": "application/json"},
+    }
+    if system:
+        body["systemInstruction"] = {"parts": [{"text": system}]}
+    return body
 
 
 def build_packet(diff: str, acceptance_criteria: str) -> dict[str, str]:
@@ -74,6 +113,8 @@ def _finding(severity: str, summary: str) -> dict[str, str]:
 def _base_result(diff: str, truncated: bool) -> dict[str, Any]:
     return {
         "schema": SCHEMA,
+        "provider": "gemini",
+        "model": os.environ.get("LEQUTIS_REVIEWER_MODEL") or DEFAULT_MODEL,
         "verdict": "block",
         "in_scope": False,
         "findings": [],
@@ -153,7 +194,7 @@ def review(
             "messages": outbound_messages(packet),
         }
         response = caller(
-            os.environ.get("LEQUTIS_REVIEWER_API_URL") or DEFAULT_URL,
+            resolve_endpoint(payload["model"], os.environ.get("LEQUTIS_REVIEWER_API_URL")),
             payload,
             {},
         )
@@ -173,26 +214,42 @@ def review(
     return result
 
 
+def _normalize_model_response(parsed: dict[str, Any]) -> dict[str, Any]:
+    if "choices" in parsed:
+        return parsed
+    parts = parsed["candidates"][0]["content"]["parts"]
+    text = "".join(part.get("text") or "" for part in parts if isinstance(part, dict))
+    return {"choices": [{"message": {"content": text}}]}
+
+
 def default_transport(url: str, payload: dict[str, Any], _headers: dict[str, str]) -> dict[str, Any]:
     key = os.environ.get(SECRET_NAME) or ""
-    body = json.dumps(payload).encode("utf-8")
-    if key and key.encode("utf-8") in body:
-        raise RuntimeError("refusing to send the reviewer key in the request body")
-    request = urllib.request.Request(
-        url,
-        data=body,
-        headers={
+    model = str(payload.get("model") or DEFAULT_MODEL)
+    endpoint = resolve_endpoint(model, url)
+    host = (urllib.parse.urlparse(endpoint).hostname or "").lower()
+    if host == GEMINI_HOST:
+        encoded = json.dumps(gemini_body(payload)).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "x-goog-api-key": key,
+        }
+    else:
+        encoded = json.dumps(payload).encode("utf-8")
+        headers = {
             "Authorization": "Bearer " + key,
             "Content-Type": "application/json",
             "Accept": "application/json",
-        },
-        method="POST",
-    )
+        }
+    if key and (key.encode("utf-8") in encoded or key in endpoint):
+        raise RuntimeError("refusing to send the reviewer key in the request body")
+    request = urllib.request.Request(endpoint, data=encoded, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(request, timeout=45) as response:
-            return json.loads(response.read().decode("utf-8"))
+        with urllib.request.urlopen(request, timeout=60) as response:
+            parsed = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         raise RuntimeError("http_" + str(exc.code)) from exc
+    return _normalize_model_response(parsed)
 
 
 def comment_body(result: dict[str, Any], head_sha: str) -> str:
@@ -202,6 +259,8 @@ def comment_body(result: dict[str, Any], head_sha: str) -> str:
         "head_sha": head_sha,
         "in_scope": result["in_scope"],
         "packet_keys": result["packet_keys"],
+        "model": result.get("model"),
+        "provider": result.get("provider"),
         "schema": result["schema"],
         "secret": result["secret"],
         "truncated": result["truncated"],
