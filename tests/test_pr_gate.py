@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from integrations.pr_gate import decide, git_files  # noqa: E402
+from integrations.pr_gate import codex_review_status, decide, git_files  # noqa: E402
 
 
 class PrGateTests(unittest.TestCase):
@@ -113,6 +113,26 @@ class PrGateTests(unittest.TestCase):
             git("commit", "--allow-empty", "-m", "empty-two")
             files = git_files("main", "HEAD", cwd=str(root))
             self.assertEqual(files, [])
+
+    def test_codex_issue_comment_counts_only_for_this_head(self):
+        head = "76986a35cf22a3b71c7237e6917d8567d37b4f8c"
+        summary = (
+            "<!-- codex-review-state:v1 "
+            '{"code_review":{"commit_sha":"%s","has_any_findings":false,'
+            '"has_unresolved_findings":false,"status":"completed"}} -->'
+        ) % head
+        comment = [{"user": {"login": "chatgpt-codex-connector[bot]"}, "body": summary}]
+        self.assertEqual(codex_review_status([], [], comment, head), "pass")
+        self.assertEqual(codex_review_status([], [], comment, "0" * 40), "missing")
+        findings = summary.replace('"has_any_findings":false', '"has_any_findings":true')
+        found = [{"user": {"login": "chatgpt-codex-connector[bot]"}, "body": findings}]
+        self.assertEqual(codex_review_status([], [], found, head), "findings")
+        line = [{
+            "user": {"login": "chatgpt-codex-connector[bot]"},
+            "commit_id": head,
+            "body": "<!-- codex-code-review-finding -->",
+        }]
+        self.assertEqual(codex_review_status([], line, comment, head), "findings")
 
 
 if __name__ == "__main__":

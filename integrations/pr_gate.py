@@ -36,6 +36,68 @@ DESTRUCTIVE_MARKERS = (
 )
 
 HARMLESS_PREFIX = "docs/"
+CODEX_BOT = "chatgpt-codex-connector[bot]"
+CODEX_STATE_MARKER = "codex-review-state:v1 "
+
+
+def _login(item: dict[str, Any]) -> str:
+    user = item.get("user") or {}
+    return str(user.get("login") or "")
+
+
+def codex_review_status(
+    reviews: list[dict[str, Any]],
+    review_comments: list[dict[str, Any]],
+    issue_comments: list[dict[str, Any]],
+    head_sha: str,
+) -> str:
+    """Read Codex from pull reviews and from its issue-comment summary.
+
+    Codex posts the completed summary on the issue thread, not as a pull
+    review. A summary counts only when its commit SHA is this head.
+    Findings outrank a pass.
+    """
+    findings = [
+        item for item in review_comments
+        if _login(item) == CODEX_BOT
+        and item.get("commit_id") == head_sha
+        and "codex-code-review-finding" in str(item.get("body") or "")
+    ]
+    if findings:
+        return "findings"
+    for item in issue_comments:
+        if _login(item) != CODEX_BOT:
+            continue
+        status = _status_from_summary(str(item.get("body") or ""), head_sha)
+        if status == "findings":
+            return "findings"
+        if status == "pass":
+            return "pass"
+    matched = [
+        item for item in reviews
+        if _login(item) == CODEX_BOT and item.get("commit_id") == head_sha
+    ]
+    if matched:
+        return "pass"
+    return "missing"
+
+
+def _status_from_summary(body: str, head_sha: str) -> str:
+    if CODEX_STATE_MARKER not in body:
+        return "missing"
+    start = body.index(CODEX_STATE_MARKER) + len(CODEX_STATE_MARKER)
+    end = body.find("-->", start)
+    raw = body[start:end].strip() if end != -1 else ""
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return "missing"
+    review = data.get("code_review") or {}
+    if review.get("commit_sha") != head_sha or review.get("status") != "completed":
+        return "missing"
+    if review.get("has_any_findings") or review.get("has_unresolved_findings"):
+        return "findings"
+    return "pass"
 
 
 def _blocked(path: str) -> list[str]:

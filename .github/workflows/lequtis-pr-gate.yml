@@ -48,15 +48,13 @@ jobs:
         run: |
           set -euo pipefail
           status=missing
+          head="${{ github.event.pull_request.head.sha }}"
           for _ in 1 2 3 4 5 6 7 8; do
-            comments=$(gh api "repos/${REPO}/pulls/${PR}/comments" --jq '[.[] | select(.user.login=="chatgpt-codex-connector[bot]") | .body] | join("\n")')
-            reviews=$(gh api "repos/${REPO}/pulls/${PR}/reviews" --jq '[.[] | select(.user.login=="chatgpt-codex-connector[bot]")] | length')
-            if printf '%s' "$comments" | grep -q 'codex-code-review-finding'; then
-              status=findings
-              break
-            fi
-            if [ "$reviews" != "0" ]; then
-              status=pass
+            gh api "repos/${REPO}/pulls/${PR}/comments" > /tmp/review-comments.json
+            gh api "repos/${REPO}/pulls/${PR}/reviews" > /tmp/reviews.json
+            gh api "repos/${REPO}/issues/${PR}/comments" > /tmp/issue-comments.json
+            status=$(python3 -c 'import json,sys; sys.path.insert(0,"."); from integrations.pr_gate import codex_review_status; print(codex_review_status(json.load(open("/tmp/reviews.json")), json.load(open("/tmp/review-comments.json")), json.load(open("/tmp/issue-comments.json")), sys.argv[1]))' "$head")
+            if [ "$status" != "missing" ]; then
               break
             fi
             sleep 30
