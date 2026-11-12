@@ -18,9 +18,9 @@
       "sha256": "f6b9ddea2c3c579841428a0e6adbf96af6eafe6d76f11f9fc61b1c11a9e61632"
     },
     {
-      "bytes": 103569,
+      "bytes": 106151,
       "path": "core/lequtis.py",
-      "sha256": "cadfbf123afab56bf472cd78f6756f7f76365559b1651a3cb0330bdd51c9370b"
+      "sha256": "3fb2065468b739bd237cf0be3814245bbc3894ae8f98f1ac41854dd1ed89bcc2"
     },
     {
       "bytes": 3773,
@@ -57,6 +57,6 @@
     "core",
     "database/schema.sql"
   ],
-  "manifest_sha256": "2284247cfb7d8da7429d1d63bca3a3161e7348e7ad39bc18a94721c6e09a9aa8",
+  "manifest_sha256": "2bf99de1da813d3bec6f3aa0657352ec721bb262bff4ba3b65a36e53c800a956",
   "schema": "lequtis-golden-master-v1"
 }
