@@ -71,6 +71,11 @@ def passing_request(**overrides):
 
 
 class EngineeringGateTests(unittest.TestCase):
+    def test_draft_pull_requests_are_held(self):
+        receipt = gate.build_receipt(passing_request(draft=True))
+        self.assertEqual(receipt["merge_decision"], "hold")
+        self.assertIn("draft", receipt["merge_reason"])
+
     def test_docs_change_merges_only_when_it_is_genuinely_necessary(self):
         receipt = gate.build_receipt(passing_request())
         self.assertTrue(receipt["genuinely_necessary"])
@@ -276,11 +281,36 @@ class EngineeringGateTests(unittest.TestCase):
         self.assertIn("gemini-3.8-flash", (ROOT / "integrations/independent_reviewer.py").read_text(encoding="utf-8"))
         self.assertIn("contents: write", gate_workflow)
         self.assertIn("Require the free Gemini review before merge", old)
-        self.assertIn("steps.gemini.outputs.allow == 'true'", old)
+        self.assertIn("needs.gate.outputs.gemini_allow == 'true'", old)
+        self.assertIn("vars.LEQUTIS_AUTOMERGE_ENABLED == 'true'", old)
+        self.assertIn("vars.LEQUTIS_AUTOMERGE_ENABLED == 'true'", gate_workflow)
+        note = (ROOT / "docs/engineering/AUTOMERGE.md").read_text(encoding="utf-8")
+        self.assertIn("off by default", note)
+        self.assertIn("LEQUTIS_AUTOMERGE_ENABLED", note)
         definition = (ROOT / "docs/engineering/ENGINEERING_GATE.md").read_text(encoding="utf-8")
         self.assertIn("non-empty net diff", definition)
         self.assertIn("no duplicate", definition)
         self.assertIn("in scope", definition)
+
+    def test_merge_commands_stay_behind_the_repository_variable(self):
+        for name in ("lequtis-engineering-gate.yml", "lequtis-pr-gate.yml"):
+            text = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+            before, marker, merge_job = text.partition("\n  merge:\n")
+            self.assertTrue(marker, name)
+            self.assertNotIn("gh pr merge", before, name)
+            self.assertEqual(merge_job.count("gh pr merge"), 1, name)
+            self.assertIn("vars.LEQUTIS_AUTOMERGE_ENABLED == 'true'", merge_job.split("steps:", 1)[0])
+            self.assertIn('[ "${LEQUTIS_AUTOMERGE_ENABLED}" != "true" ]', merge_job)
+        pr = (ROOT / ".github/workflows/lequtis-pr-gate.yml").read_text(encoding="utf-8")
+        head, _, _ = pr.partition("\njobs:")
+        self.assertNotIn("pull-requests: write", head)
+        self.assertNotIn("contents: write", head)
+        eng = (ROOT / ".github/workflows/lequtis-engineering-gate.yml").read_text(encoding="utf-8")
+        before_merge, _, merge_job = eng.partition("\n  merge:\n")
+        self.assertNotIn("pull-requests: write", before_merge)
+        self.assertIn("contents: write", before_merge)
+        self.assertIn("pull-requests: write", merge_job)
+        self.assertIn("contents: write", merge_job)
 
     def test_hermes_summary_degrades_and_hides_secret_values(self):
         secret = "tunnel-secret-value"

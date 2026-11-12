@@ -14,7 +14,7 @@ matrix:
   - principal: cursor_cloud_agent
     resource: github_pr_gate
     permission: allow
-    evidence: "integrations/pr_gate + Actions workflow; docs-only auto-merge; receipts under evidence/"
+    evidence: "integrations/pr_gate + Actions workflow; auto-merge off unless LEQUTIS_AUTOMERGE_ENABLED=true; receipts under evidence/"
   - principal: cursor_cloud_agent
     resource: google_drive_mcp
     permission: deny

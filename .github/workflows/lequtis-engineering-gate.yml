@@ -12,7 +12,7 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
-      pull-requests: write
+      pull-requests: read
       issues: write
     outputs:
       merge: ${{ steps.decide.outputs.merge }}
@@ -151,9 +151,10 @@ jobs:
           git push origin "HEAD:${HEAD_REF}"
           git rev-parse HEAD
 
+  # Skipped unless the repository variable LEQUTIS_AUTOMERGE_ENABLED is true.
   merge:
     needs: assess
-    if: needs.assess.result == 'success' && needs.assess.outputs.merge == 'true'
+    if: needs.assess.result == 'success' && needs.assess.outputs.merge == 'true' && vars.LEQUTIS_AUTOMERGE_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -178,6 +179,7 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LEQUTIS_AUTOMERGE_ENABLED: ${{ vars.LEQUTIS_AUTOMERGE_ENABLED }}
         run: |
           set -euo pipefail
           receipt=$(find evidence -name engineering-receipt.json | head -n 1)
@@ -189,6 +191,10 @@ jobs:
           decision=$(python3 -c 'import json; print(json.load(open("evidence/engineering-receipt.json"))["merge_decision"])')
           if [ "$decision" != "merge" ]; then
             echo "receipt does not allow merge"
+            exit 1
+          fi
+          if [ "${LEQUTIS_AUTOMERGE_ENABLED}" != "true" ]; then
+            echo "LEQUTIS_AUTOMERGE_ENABLED is not true. Not merging."
             exit 1
           fi
           set +e

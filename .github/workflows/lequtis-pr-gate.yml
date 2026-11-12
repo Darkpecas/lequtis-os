@@ -4,13 +4,17 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
 permissions:
   contents: read
-  pull-requests: write
+  issues: write
+  pull-requests: read
   checks: read
   statuses: read
 jobs:
   gate:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      merge: ${{ steps.decide.outputs.merge }}
+      gemini_allow: ${{ steps.gemini.outputs.allow }}
     env:
       PYTHONDONTWRITEBYTECODE: "1"
       LEQUTIS_WORKER: deterministic
@@ -215,6 +219,7 @@ jobs:
           print(verdict["evidence_label"])
           print()
           print("- merge_allowed:", verdict["merge_allowed"])
+          print("- automerge: off unless repository variable LEQUTIS_AUTOMERGE_ENABLED is true")
           print("- blocking:", ", ".join(verdict["blocking"]) or "none")
           print("- ai_review:", verdict["ai_review"], f"(source={verdict.get('review_source')})")
           print("- tests_passed:", verdict["tests_passed"], f"(attempts={verdict['test_attempts']})")
@@ -279,31 +284,7 @@ jobs:
           if [ "$allow" != "true" ]; then
             echo "Free Gemini review is $verdict. Auto-merge stays closed."
           fi
-
-      - name: Merge only a qualifying harmless change
-        if: steps.decide.outputs.merge == 'true' && steps.gemini.outputs.allow == 'true'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          gh pr merge "$PR" --repo "$REPO" --squash
-          sha=$(gh api "repos/${REPO}/pulls/${PR}" --jq '.merge_commit_sha // empty')
-          echo "merge_sha=$sha"
-          if [ -n "$sha" ] && [ -f evidence/engineering-workflow-receipt.json ]; then
-            python3 - <<PY
-          import json, sys
-          sys.path.insert(0, ".")
-          from integrations.pr_workflow_receipt import record_merge
-          path = "evidence/engineering-workflow-receipt.json"
-          data = json.load(open(path, encoding="utf-8"))
-          updated = record_merge(data, "$sha")
-          open(path, "w", encoding="utf-8").write(json.dumps(updated, indent=2, sort_keys=True) + "\n")
-          print(json.dumps({"merged": True, "merge_sha": "$sha", "result_sha256": updated["payload"]["result_sha256"]}, indent=2))
-          PY
-          fi
+          echo "Merge runs only when LEQUTIS_AUTOMERGE_ENABLED is true."
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -340,3 +321,60 @@ jobs:
               sys.exit(1)
           print("Gate job conclusion ok; merge_allowed=", verdict.get("merge_allowed"))
           PY
+
+  # Skipped unless the repository variable LEQUTIS_AUTOMERGE_ENABLED is true.
+  merge:
+    needs: gate
+    if: needs.gate.result == 'success' && needs.gate.outputs.merge == 'true' && needs.gate.outputs.gemini_allow == 'true' && vars.LEQUTIS_AUTOMERGE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Download the gate receipt
+        uses: actions/download-artifact@v4
+        with:
+          name: pr-gate-${{ github.event.pull_request.head.sha }}
+          path: evidence
+      - name: Merge only when auto-merge is explicitly enabled
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          LEQUTIS_AUTOMERGE_ENABLED: ${{ vars.LEQUTIS_AUTOMERGE_ENABLED }}
+        run: |
+          set -euo pipefail
+          if [ "${LEQUTIS_AUTOMERGE_ENABLED}" != "true" ]; then
+            echo "LEQUTIS_AUTOMERGE_ENABLED is not true. Not merging."
+            exit 1
+          fi
+          gh pr merge "$PR" --repo "$REPO" --squash
+          sha=$(gh api "repos/${REPO}/pulls/${PR}" --jq '.merge_commit_sha // empty')
+          echo "merge_sha=$sha"
+          if [ -n "$sha" ] && [ -f evidence/engineering-workflow-receipt.json ]; then
+            python3 - <<PY
+          import json, sys
+          sys.path.insert(0, ".")
+          from integrations.pr_workflow_receipt import record_merge
+          path = "evidence/engineering-workflow-receipt.json"
+          data = json.load(open(path, encoding="utf-8"))
+          updated = record_merge(data, "$sha")
+          open(path, "w", encoding="utf-8").write(json.dumps(updated, indent=2, sort_keys=True) + "\n")
+          print(json.dumps({"merged": True, "merge_sha": "$sha", "result_sha256": updated["payload"]["result_sha256"]}, indent=2))
+          PY
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr-gate-merged-${{ github.event.pull_request.head.sha }}
+          path: evidence/engineering-workflow-receipt.json
+          if-no-files-found: warn

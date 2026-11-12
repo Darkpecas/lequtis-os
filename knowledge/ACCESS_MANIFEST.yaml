@@ -74,4 +74,4 @@ routes:
     evidence: "evidence/recovery-integration-2026-11-10/tests.log; 47 unittest tests passed; no production DB accessed"
   - id: github_pr_gate
     status: verified_disposable_local
-    evidence: "integrations/pr_gate.py + pr_auditor.py + lequtis-pr-gate.yml; auto-merges docs-only only; never calls Hermes/Telegram/Hostinger"
+    evidence: "integrations/pr_gate.py + pr_auditor.py + lequtis-pr-gate.yml; auto-merge off unless LEQUTIS_AUTOMERGE_ENABLED=true; never calls Hermes/Telegram/Hostinger"

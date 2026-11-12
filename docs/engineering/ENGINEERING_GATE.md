@@ -12,7 +12,9 @@ Genuinely necessary means a non-empty net diff, no duplicate of existing code or
 2. It has no duplicate of existing code or of an open pull request.
 3. The independent reviewer judges the diff in scope for the stated acceptance criteria.
 
-Genuinely necessary is required before auto-merge. It is not enough on its own. Auto-merge also needs the disposable test check, the independent review check, evidence for every acceptance criterion, no blocking findings, and a clear denylist. Repository rules that GitHub itself enforces still apply.
+Genuinely necessary is required before a `merge` decision. It is not enough on its own. That decision also needs the disposable test check, the independent review check, evidence for every acceptance criterion, no blocking findings, and a clear denylist. Repository rules that GitHub itself enforces still apply.
+
+Auto-merge is off by default. A `merge` decision is recorded and does not merge the pull request. The merge job runs only when the repository variable `LEQUTIS_AUTOMERGE_ENABLED` is `true`. See [AUTOMERGE.md](AUTOMERGE.md).
 
 ## Denylist
 
