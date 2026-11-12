@@ -187,6 +187,10 @@ class ExecutionIntegrationTests(unittest.TestCase):
         result = json.loads(self.run_cli("verify-events", expected=1).stdout)
         self.assertFalse(result["valid"])
         self.assertEqual(result["invalid_sequence"], 1)
+        verify = json.loads(self.run_cli("verify", expected=1).stdout)
+        self.assertFalse(verify["ok"])
+        self.assertEqual(verify["reason"], "event_hash_mismatch")
+        self.assertEqual(verify["broken_at"], 1)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,24 @@
+E
+======================================================================
+ERROR: test_killed_after_learning_reuses_both_memories (__main__.RecoveryAfterActTests.test_killed_after_learning_reuses_both_memories)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/debc2202db4c/lequtis-recovery-29/tests/test_recovery_after_act.py", line 35, in test_killed_after_learning_reuses_both_memories
+    run("goal", "--key", "kill-after-act", "remember: retain exactly one fact")
+  File "/workspace/scratch/debc2202db4c/lequtis-recovery-29/tests/test_recovery_after_act.py", line 29, in run
+    return json.loads(p.stdout)
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/json/__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/json/decoder.py", line 338, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/json/decoder.py", line 356, in raw_decode
+    raise JSONDecodeError("Expecting value", s, err.value) from None
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+
+----------------------------------------------------------------------
+Ran 1 test in 0.324s
+
+FAILED (errors=1)

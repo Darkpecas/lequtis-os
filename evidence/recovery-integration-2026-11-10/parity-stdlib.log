@@ -1,0 +1,13 @@
+TEST SKILLS: evidence-gated sandbox → admission → retire
+  PASS
+TEST SKILLS CLI: accepts structured promotion evidence
+  PASS
+TEST VERIFIER: rejects self-report; requires artifacts
+  PASS
+TEST PARITY: ACCESS/SOURCES/gates IDs consistent
+  PASS
+TEST SEARCH: knowledge + memory substring
+  PASS
+TEST SCHEMA: schema.sql matches init() tables/columns
+  PASS
+ALL PASS: skill receipts + verifier + parity + search + schema

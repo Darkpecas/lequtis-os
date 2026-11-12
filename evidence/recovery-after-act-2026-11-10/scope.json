@@ -1,0 +1,21 @@
+{
+  "task": "LQ-RECOVERY-AFTER-ACT-20261110",
+  "scope": "disposable local integration; no live VPS contact",
+  "repository": "Darkpecas/lequtis-os",
+  "repository_id": 1337559246,
+  "authenticated_login": "Darkpecas",
+  "authenticated_user_id": 44348609,
+  "main_sha": "e3f3d7ff8e5d6a9db189dd99a90d4504b9efa50b",
+  "pr29_sha": "4fa29cd1f9118f1993cb3b36e5b46cb91da49961",
+  "python": "3.12.14",
+  "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "finding": "SIGKILL after ACT and LEARN before terminal commit duplicates experience memory on retry; semantic memory is reused.",
+  "fix": "Stable agenda-derived experience ID with conflict detection; insertion/reuse event shares the SQLite write transaction.",
+  "boundaries": [
+    "Existing random-ID experience records are preserved; no historical deduplication or migration.",
+    "Late cancellation fences terminal result commit; it does not undo already-applied memory/artifact effects.",
+    "No exactly-once external delivery claim.",
+    "Recovery is explicit recover then retry; not unattended recovery.",
+    "No LLM benefit measured; harness workers are mocks."
+  ]
+}

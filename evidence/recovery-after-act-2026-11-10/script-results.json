@@ -1,0 +1,74 @@
+[
+  {
+    "command": [
+      "python3",
+      "tests/autonomous_loop_test.py"
+    ],
+    "exit_code": 0,
+    "log": "script-0.log"
+  },
+  {
+    "command": [
+      "python3",
+      "tests/test_skills_verifier_parity.py"
+    ],
+    "exit_code": 1,
+    "log": "script-1.log"
+  },
+  {
+    "command": [
+      "python3",
+      "tests/test_workers.py"
+    ],
+    "exit_code": 0,
+    "log": "script-2.log"
+  },
+  {
+    "command": [
+      "python3",
+      "tests/test_bridge.py"
+    ],
+    "exit_code": 0,
+    "log": "script-3.log"
+  },
+  {
+    "command": [
+      "python3",
+      "tests/test_host_preflight.py"
+    ],
+    "exit_code": 0,
+    "log": "script-4.log"
+  },
+  {
+    "command": [
+      "python3",
+      "tests/test_hermes_route.py"
+    ],
+    "exit_code": 0,
+    "log": "script-5.log"
+  },
+  {
+    "command": [
+      "python3",
+      "tests/test_host_receipt.py"
+    ],
+    "exit_code": 0,
+    "log": "script-6.log"
+  },
+  {
+    "command": [
+      "sh",
+      "tests/smoke.sh"
+    ],
+    "exit_code": 0,
+    "log": "script-7.log"
+  },
+  {
+    "command": [
+      "sh",
+      "doctor.sh"
+    ],
+    "exit_code": 2,
+    "log": "script-8.log"
+  }
+]
