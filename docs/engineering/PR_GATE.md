@@ -4,6 +4,8 @@ LOCAL PROOF, NOT LIVE VPS VERIFIED.
 
 LeQutis remains the authority. This gate is a subordinate check. It does not call Hermes, Telegram, or Hostinger and it does not provision new infrastructure. The existing Codex GitHub review is the separate AI reviewer. This workflow only reads that review; it does not replace it.
 
+Auto-merge is no longer performed by this workflow. `.github/workflows/lequtis-engineering-gate.yml` is the merge authority. This file still records the narrower docs-only decision and does not merge.
+
 `.github/workflows/lequtis-pr-gate.yml` runs on pull requests:
 
 1. Run the unit suite. On failure, run it once more and record both attempts.

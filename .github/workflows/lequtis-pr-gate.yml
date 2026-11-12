@@ -3,7 +3,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
 permissions:
-  contents: write
+  contents: read
   pull-requests: write
 jobs:
   gate:
@@ -114,15 +114,9 @@ jobs:
           print("```")
           PY
           gh pr comment "$PR" --repo "$REPO" --body-file /tmp/pr-gate-comment.md
-      - name: Merge only a qualifying harmless change
+      - name: Leave merge to the engineering gate
         if: steps.decide.outputs.merge == 'true'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
-        run: |
-          gh pr merge "$PR" --repo "$REPO" --squash
+        run: echo "Merge authority is the LeQutis engineering gate. This workflow does not merge."
       - uses: actions/upload-artifact@v4
         if: always()
         with:
