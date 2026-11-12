@@ -983,6 +983,35 @@ def act(choice: dict[str, Any]) -> dict[str, Any]:
             "result": json.loads(task["result"] or "{}"),
         }
 
+    # Enforce trusted action metadata before ACT side effects.
+    # Caller-provided policy, classification and delegation are ignored.
+    from compositional_policy import Session, ToolPolicy
+    trusted = {
+        "inspect_status": ToolPolicy("inspect_status", frozenset({"state"}), frozenset(), 1),
+        "store_note": ToolPolicy("store_note", frozenset(), frozenset({"memory"}), 1),
+        "ping": ToolPolicy("ping", frozenset(), frozenset({"observation"}), 0),
+        "deliberate_fail": ToolPolicy("deliberate_fail", frozenset(), frozenset({"test"}), 0),
+    }
+    action_name = task["action"]
+    policy = trusted.get(action_name)
+    # Each existing action gets only its own delegated scope; this is not
+    # a substitute for a persistent multi-tool session or resource taint.
+    scope = Session(task["id"], frozenset({action_name}), 1)
+    decision = scope.authorize(policy, resource_level=0) if policy else None
+    if decision is None or not decision.allowed:
+        reason = decision.reason if decision else "unregistered_action"
+        err = "policy_denied:" + reason
+        with connect() as db:
+            db.execute(
+                "UPDATE tasks SET status=?, error=?, updated=? WHERE id=?",
+                ("failed", err, now(), task["id"]),
+            )
+        event("task.policy_denied", {"id": task["id"], "action": action_name, "reason": reason})
+        return {"task_id": task["id"], "ok": False, "error": err, "duplicate": False,
+                "agenda_id": task.get("agenda_id") or choice.get("agenda_id")}
+    event("task.policy_allowed", {"id": task["id"], "action": action_name,
+                                  "scope": scope.task_id, "sensitivity": decision.sensitivity})
+
     ts = now()
     with connect() as db:
         db.execute(
