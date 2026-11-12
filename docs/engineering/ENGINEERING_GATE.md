@@ -23,7 +23,7 @@ A match forces the `needs-human` label and blocks auto-merge.
 
 Path classes: secret material (`.env`, secret, credential, password, `.pem`, `.key`, `id_rsa`), database migrations and `database/schema.sql`, destructive script names, and `infra/`, `terraform/`, `deploy/`, plus Terraform filenames.
 
-Keyword classes, on added diff lines: a SQL drop of a table or database, a recursive forced shell removal, a Terraform destroy, or a private-key block.
+Keyword classes, on added diff lines: a SQL drop of a table or database, a recursive forced shell removal, destroying a Terraform configuration, or a private-key block. Renames are not hidden: both the old and new paths are checked. A review verdict counts only when `github-actions[bot]` posted it for that head SHA. The security hold above removes automatic merge and repair pushes; these checks do not restore them.
 
 Unverified infrastructure is held the same way: `.github/`, the gate modules, this document, `docs/engineering/PR_GATE.md`, and the gate tests. Those files decide merge behavior, so this gate does not merge its own policy.
 

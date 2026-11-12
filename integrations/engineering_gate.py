@@ -266,10 +266,19 @@ def parse_review_body(body: str) -> dict[str, Any] | None:
     return parsed
 
 
-def select_review(bodies: list[str], head_sha: str) -> dict[str, Any] | None:
+REVIEW_AUTHOR = "github-actions[bot]"
+
+
+def select_review(reviews: list[Any], head_sha: str) -> dict[str, Any] | None:
+    """Accept only the Actions review for this head. Other authors cannot set the verdict."""
     chosen = None
-    for body in bodies:
-        parsed = parse_review_body(body)
+    for item in reviews:
+        if not isinstance(item, dict):
+            continue
+        login = ((item.get("user") or {}).get("login") or "")
+        if login != REVIEW_AUTHOR:
+            continue
+        parsed = parse_review_body(item.get("body") or "")
         if parsed and parsed.get("head_sha") == head_sha:
             chosen = parsed
     return chosen
@@ -560,12 +569,17 @@ def commit_records(cwd: str, base: str, head: str) -> list[dict[str, str]]:
 
 
 def _tracked_text(cwd: str, path: str) -> str | None:
-    proc = _git(cwd, "show", "HEAD:" + path)
-    if proc.returncode != 0:
+    proc = subprocess.run(
+        ["git", "-C", cwd, "show", "HEAD:" + path],
+        capture_output=True,
+        check=False,
+    )
+    if proc.returncode != 0 or b"\0" in proc.stdout:
         return None
-    if "\0" in proc.stdout:
+    try:
+        return proc.stdout.decode("utf-8")
+    except UnicodeDecodeError:
         return None
-    return proc.stdout
 
 
 def duplicate_blobs(cwd: str, files: list[str]) -> list[str]:
@@ -593,7 +607,7 @@ def duplicate_blobs(cwd: str, files: list[str]) -> list[str]:
 
 
 def git_context(cwd: str, base: str, head: str, other_diffs: list[tuple[str, str]], scan_complete: bool) -> dict[str, Any]:
-    names = _git(cwd, "diff", "--name-only", f"{base}...{head}")
+    names = _git(cwd, "diff", "--name-only", "--no-renames", f"{base}...{head}")
     if names.returncode != 0:
         raise RuntimeError(names.stderr.strip() or "git diff failed")
     files = [line for line in names.stdout.splitlines() if line.strip()]
@@ -641,9 +655,11 @@ def _gh_json(args: list[str]) -> Any:
 def load_open_diffs(repo: str, pr: str) -> tuple[list[tuple[str, str]], bool]:
     try:
         items = _gh_json([
-            "pr", "list", "--repo", repo, "--state", "open", "--limit", "20", "--json", "number,url",
+            "pr", "list", "--repo", repo, "--state", "open", "--limit", "100", "--json", "number,url",
         ])
     except (RuntimeError, json.JSONDecodeError):
+        return [], False
+    if len(items) >= 100:
         return [], False
     diffs: list[tuple[str, str]] = []
     for item in items:
@@ -685,9 +701,9 @@ def poll_checks(
     return {"complete": False, "checks": last, "summary": summarize_checks(last, require_loop)}
 
 
-def fetch_review_bodies(repo: str, pr: str) -> list[str]:
+def fetch_review_bodies(repo: str, pr: str) -> list[dict[str, Any]]:
     reviews = _gh_json(["api", f"repos/{repo}/pulls/{pr}/reviews?per_page=100"])
-    return [item.get("body") or "" for item in reviews]
+    return [item for item in reviews if isinstance(item, dict)]
 
 
 def _token() -> str:
@@ -812,7 +828,7 @@ def write_gate_outputs(receipt_path: str, output_path: str) -> None:
 
 
 def prepare_repair_request(cwd: str, base: str) -> dict[str, Any]:
-    names = _git(cwd, "diff", "--name-only", f"{base}...HEAD")
+    names = _git(cwd, "diff", "--name-only", "--no-renames", f"{base}...HEAD")
     if names.returncode != 0:
         raise RuntimeError(names.stderr.strip() or "git diff failed")
     changed: dict[str, str] = {}
