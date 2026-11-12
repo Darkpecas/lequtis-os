@@ -1,6 +1,7 @@
 name: LeQutis independent review
 on:
-  pull_request:
+  # Trusted workflow definition comes from the base branch, not a PR merge ref.
+  pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review]
 permissions:
   contents: read
