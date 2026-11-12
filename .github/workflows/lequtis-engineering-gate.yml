@@ -107,7 +107,8 @@ jobs:
 
   repair:
     needs: assess
-    if: always() && needs.assess.outputs.repair == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+    # SECURITY HOLD: an untrusted pull-request head must never enter a write-capable repair job.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -153,7 +154,8 @@ jobs:
 
   merge:
     needs: assess
-    if: needs.assess.result == 'success' && needs.assess.outputs.merge == 'true'
+    # SECURITY HOLD: do not grant merge credentials until the authorization code is trusted.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
