@@ -1,0 +1,10 @@
+TEST ROUTE: disposable authorized probe receipt
+  PASS
+TEST ROUTE: live refuses without tunnel credentials
+  PASS
+TEST ROUTE: local Hermes binary cannot certify Hostinger live
+  PASS
+TEST ROUTE: receipts redact secret-like fields
+  PASS
+
+=== LEQUTIS HERMES ROUTE TESTS: ALL PASS ===

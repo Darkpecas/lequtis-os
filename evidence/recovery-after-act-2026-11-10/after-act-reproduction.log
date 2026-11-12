@@ -1,0 +1,31 @@
+F
+======================================================================
+FAIL: test_killed_after_learning_reuses_both_memories (__main__.RecoveryAfterActTests.test_killed_after_learning_reuses_both_memories)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/debc2202db4c/lequtis-recovery-29/tests/test_recovery_after_act.py", line 64, in test_killed_after_learning_reuses_both_memories
+    self.assertEqual(rows("SELECT kind,id,content FROM memory ORDER BY kind"), before)
+AssertionError: Lists differ: [('ex[123 chars]), ('experience', 'b63beff1-c0bf-4fe3-b160-922[162 chars]ct')] != [('ex[123 chars]), ('semantic', '65464a08-96d0-5d10-b543-21600[32 chars]ct')]
+
+First differing element 1:
+('experience', 'b63beff1-c0bf-4fe3-b160-922[80 chars]act')
+('semantic', '65464a08-96d0-5d10-b543-21600[31 chars]act')
+
+First list contains 1 additional elements.
+First extra element 2:
+('semantic', '65464a08-96d0-5d10-b543-21600e303337', 'retain exactly one fact')
+
+  [('experience',
+    'f1ece137-97e9-41bc-9d97-84da8331fc7c',
+-   'Successful execution of agenda item: remember: retain exactly one fact'),
+-  ('experience',
+-   'b63beff1-c0bf-4fe3-b160-92220acdea04',
+    'Successful execution of agenda item: remember: retain exactly one fact'),
+   ('semantic',
+    '65464a08-96d0-5d10-b543-21600e303337',
+    'retain exactly one fact')]
+
+----------------------------------------------------------------------
+Ran 1 test in 1.484s
+
+FAILED (failures=1)

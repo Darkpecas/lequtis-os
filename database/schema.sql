@@ -2,6 +2,10 @@ PRAGMA journal_mode = WAL;
 PRAGMA synchronous = FULL;
 
 -- Canonical living-kernel schema (also created by core/lequtis.py init).
+-- Revision lequtis-os-kernel-4.
+-- An existing lequtis-os-kernel-3 database is not changed by init or status.
+-- Migrate it explicitly: python3 core/lequtis.py migrate
+-- (database/migrations/lequtis-os-kernel-3-to-4.sql).
 
 CREATE TABLE IF NOT EXISTS identity (
     key TEXT PRIMARY KEY,
@@ -24,7 +28,8 @@ CREATE TABLE IF NOT EXISTS agenda (
     created TEXT NOT NULL,
     updated TEXT NOT NULL,
     idempotency_key TEXT,
-    request_hash TEXT
+    request_hash TEXT,
+    cancelled_at TEXT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agenda_idempotency
@@ -134,7 +139,18 @@ CREATE TABLE IF NOT EXISTS executions (
     expected_sha256 TEXT,
     verifier_challenge TEXT,
     claimed_verdict TEXT,
+    cancelled_at TEXT,
     UNIQUE(agenda_id, attempt)
+);
+
+CREATE TABLE IF NOT EXISTS cancellations (
+    id TEXT PRIMARY KEY,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    request_hash TEXT NOT NULL,
+    target_kind TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    reason TEXT,
+    created TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS verifier_observations (

@@ -1,0 +1,12 @@
+TEST WORKERS: deterministic default loop still completes
+  PASS
+TEST WORKERS: script worker influences THINK/CHOOSE
+  PASS
+TEST WORKERS: unsafe actions rejected → deterministic fallback
+  PASS
+TEST WORKERS: task retry reuses the same note memory
+  PASS
+TEST WORKERS: resume keeps canonical task key and action
+  PASS
+
+=== LEQUTIS WORKER TESTS: ALL PASS ===
