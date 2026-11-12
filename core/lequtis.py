@@ -1758,6 +1758,43 @@ def access_parity() -> dict[str, Any]:
     return check_access_parity(ROOT)
 
 
+def record_engineering_receipt(path: str | Path) -> dict[str, Any]:
+    """Assimilate a subordinate GitHub PR-gate receipt into the event chain.
+
+    Does not call Hermes, Telegram, or Hostinger. Does not claim live proof.
+    """
+    init()
+    receipt_path = Path(path)
+    if receipt_path.is_symlink():
+        raise ValueError("refusing symlinked engineering receipt")
+    raw = json.loads(receipt_path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("engineering receipt must be a JSON object")
+    gate = raw.get("gate_verdict") if isinstance(raw.get("gate_verdict"), dict) else {}
+    payload = {
+        "schema": raw.get("schema"),
+        "correlation_id": raw.get("correlation_id"),
+        "task_id": raw.get("task_id"),
+        "receipt_sha256": raw.get("receipt_sha256"),
+        "merge_allowed": gate.get("merge_allowed"),
+        "blocking": gate.get("blocking") or [],
+        "actions_run_url": raw.get("actions_run_url"),
+        "live_hermes": False,
+        "live_hostinger": False,
+        "evidence_label": "LOCAL PROOF, NOT LIVE VPS VERIFIED",
+    }
+    digest = event("engineering.workflow_receipt", payload)
+    return {
+        "ok": True,
+        "event_hash": digest,
+        "correlation_id": payload.get("correlation_id"),
+        "task_id": payload.get("task_id"),
+        "evidence_label": payload.get("evidence_label"),
+        "live_hermes": False,
+        "live_hostinger": False,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Fenced one-shot execution and independent verifier process
 # ---------------------------------------------------------------------------
@@ -2888,7 +2925,7 @@ def main() -> None:
             "loop | run-once | recover | retry | verify | verify-events | "
             "verify-independent | unfinished | complete | commit | claim | "
             "cancel | migrate | daemon | sources | assimilate | ingest | "
-            "search | gates | seed-gates | skills | parity"
+            "search | gates | seed-gates | skills | parity | engineering-receipt"
         )
         return
 
@@ -3037,6 +3074,11 @@ def main() -> None:
 
     elif cmd == "parity":
         print(json.dumps(access_parity(), indent=2))
+
+    elif cmd == "engineering-receipt":
+        if len(argv) < 3:
+            raise SystemExit("engineering-receipt requires a receipt JSON path")
+        print(json.dumps(record_engineering_receipt(argv[2]), indent=2, sort_keys=True))
 
     elif cmd == "skills":
         sub = argv[2] if len(argv) > 2 else "list"

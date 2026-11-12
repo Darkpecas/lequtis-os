@@ -51,3 +51,11 @@ matrix:
     resource: hermes_hostinger
     permission: unknown
     evidence: "2026-11-10 blocked: no authenticated host execution action exposed; Hostinger cloud-browser sign-in restricted"
+  - principal: cursor_cloud_agent
+    resource: github_pr_engineering_gate_local
+    permission: allow
+    evidence: "tests/test_pr_gate.py + test_pr_static_auditor.py + test_engineering_workflow.py disposable PASS; live auto-merge requires workflow on main"
+  - principal: cursor_cloud_agent
+    resource: telegram_notify
+    permission: unknown
+    evidence: "Telegram not present in repo; existing Hostinger-side infra not callable from this session; no replacement provisioned"

@@ -72,3 +72,9 @@ routes:
   - id: integrated_recovery_local
     status: verified_disposable_tests_2026_11_10
     evidence: "evidence/recovery-integration-2026-11-10/tests.log; 47 unittest tests passed; no production DB accessed"
+  - id: github_pr_engineering_gate
+    status: verified_disposable_local
+    evidence: "integrations/pr_gate.py + pr_static_auditor.py + engineering_workflow.py + lequtis-pr-gate.yml; docs-only auto-merge only; no Hermes/Telegram/Hostinger calls"
+  - id: telegram_notify
+    status: declared_existing_host_infra_not_in_repo
+    evidence: "No Telegram client in lequtis-os tree; do not provision replacement; Hostinger Hermes/Telegram remain operator-hosted subordinates"

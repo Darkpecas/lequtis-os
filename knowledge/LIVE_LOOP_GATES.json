@@ -79,6 +79,12 @@
       "title": "TBQ/Doc sign-off on genuinely closed obligations",
       "status": "OPEN",
       "note": "No persona transcripts fabricated; needs operator Doc/TBQ sign-off"
+    },
+    {
+      "id": "G13_github_pr_engineering_gate",
+      "title": "Autonomous PR review, verification receipts, and safe docs-only auto-merge",
+      "status": "PARTIAL",
+      "note": "Disposable gate + static auditor + engineering workflow receipts implemented under .github/workflows/lequtis-pr-gate.yml and integrations/. Auto-merge limited to harmless docs-only Markdown after independent Codex review + static audit + tests. Infrastructure/workflow PRs refuse auto-merge by design. Live Hermes/Telegram notify and Hostinger read-back remain separate OPEN/PARTIAL gates; this gate does not claim them."
     }
   ]
 }

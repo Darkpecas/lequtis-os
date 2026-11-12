@@ -5,9 +5,9 @@ It does not call a model, Hostinger, Hermes, or Telegram. A passing result is
 a local policy decision. It is not live-infrastructure proof.
 
 Auto-merge is allowed only for a non-empty, non-duplicate docs-only change
-when tests passed and the independent review status is "pass". Credentials,
-schema migrations, workflows, Hermes/Hostinger paths, and destructive diff
-text are refused.
+when tests passed, the independent AI review status is "pass", and the
+independent static auditor status is "pass". Credentials, schema migrations,
+workflows, Hermes/Hostinger paths, and destructive diff text are refused.
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ BLOCK_RULES = (
     ("credentials", (".env", "credential", "secret", "password", ".pem")),
     ("schema_migration", ("database/migrations/",)),
     ("workflow_infrastructure", (".github/",)),
-    ("infrastructure", ("runtime/hermes", "hostinger")),
+    ("infrastructure", ("runtime/hermes", "hostinger", "integrations/hermes")),
 )
 
 DESTRUCTIVE_MARKERS = (
@@ -56,8 +56,13 @@ def decide(
     ai_review: str,
     duplicate: bool,
     test_attempts: int = 1,
+    static_audit: str = "pass",
 ) -> dict[str, Any]:
-    """Return the merge decision. ai_review is pass, findings, or missing."""
+    """Return the merge decision.
+
+    ai_review is pass, findings, or missing (Codex / independent AI).
+    static_audit is pass or findings (deterministic auditor, not the implementer).
+    """
     empty = len(files) == 0
     blocked: dict[str, list[str]] = {}
     for path in files:
@@ -65,9 +70,12 @@ def decide(
         if reasons:
             blocked[path] = reasons
     destructive = [marker for marker in DESTRUCTIVE_MARKERS if marker in diff_text]
-    harmless = bool(files) and all(
-        path.startswith(HARMLESS_PREFIX) and path.endswith(".md") for path in files
-    ) and not blocked and not destructive
+    harmless = (
+        bool(files)
+        and all(path.startswith(HARMLESS_PREFIX) and path.endswith(".md") for path in files)
+        and not blocked
+        and not destructive
+    )
     unverified_claim = bool(re.search(r"\bVERIFIED\b", body or "")) and not (
         "https://github.com/" in (body or "") or "evidence/" in (body or "")
     )
@@ -82,18 +90,19 @@ def decide(
         blocking.append("tests_failed")
     if ai_review != "pass":
         blocking.append("independent_review_" + ai_review)
+    if static_audit != "pass":
+        blocking.append("static_audit_" + static_audit)
     if unverified_claim:
         blocking.append("unverified_completion_claim")
     if not harmless:
         blocking.append("not_harmless")
-    # not_harmless is expected for code PRs; do not also call them empty.
     merge_allowed = not blocking
-    if not harmless and "not_harmless" in blocking and len(blocking) > 1:
-        pass
     return {
         "evidence_label": EVIDENCE_LABEL,
         "live_hermes": False,
         "live_hostinger": False,
+        "live_telegram": False,
+        "authority": "LeQutis",
         "empty": empty,
         "duplicate": duplicate,
         "files": files,
@@ -103,6 +112,7 @@ def decide(
         "tests_passed": tests_passed,
         "test_attempts": test_attempts,
         "ai_review": ai_review,
+        "static_audit": static_audit,
         "unverified_claim": unverified_claim,
         "blocking": blocking,
         "merge_allowed": merge_allowed,
@@ -117,7 +127,10 @@ def decide(
 def git_files(base: str, head: str, cwd: str | None = None) -> list[str]:
     proc = subprocess.run(
         ["git", "diff", "--name-only", f"{base}...{head}"],
-        cwd=cwd, check=False, text=True, capture_output=True,
+        cwd=cwd,
+        check=False,
+        text=True,
+        capture_output=True,
     )
     if proc.returncode != 0:
         raise RuntimeError(proc.stderr.strip() or "git diff failed")
@@ -127,7 +140,9 @@ def git_files(base: str, head: str, cwd: str | None = None) -> list[str]:
 def git_diff(base: str, head: str) -> str:
     proc = subprocess.run(
         ["git", "diff", f"{base}...{head}"],
-        check=False, text=True, capture_output=True,
+        check=False,
+        text=True,
+        capture_output=True,
     )
     if proc.returncode != 0:
         raise RuntimeError(proc.stderr.strip() or "git diff failed")
@@ -138,30 +153,42 @@ def git_duplicate(base: str, head: str) -> bool:
     """True when this diff's stable patch-id already exists on base."""
     current = subprocess.run(
         ["git", "diff", f"{base}...{head}"],
-        check=False, text=True, capture_output=True,
+        check=False,
+        text=True,
+        capture_output=True,
     )
     if current.returncode != 0 or not current.stdout.strip():
         return False
     ident = subprocess.run(
         ["git", "patch-id", "--stable"],
-        input=current.stdout, text=True, capture_output=True, check=False,
+        input=current.stdout,
+        text=True,
+        capture_output=True,
+        check=False,
     )
     if ident.returncode != 0 or not ident.stdout.strip():
         return False
     current_id = ident.stdout.split()[0]
     log = subprocess.run(
         ["git", "log", base, "-n", "80", "-p", "--pretty=format:commit %H"],
-        check=False, text=True, capture_output=True,
+        check=False,
+        text=True,
+        capture_output=True,
     )
     if log.returncode != 0 or not log.stdout.strip():
         return False
     scanned = subprocess.run(
         ["git", "patch-id", "--stable"],
-        input=log.stdout, text=True, capture_output=True, check=False,
+        input=log.stdout,
+        text=True,
+        capture_output=True,
+        check=False,
     )
     if scanned.returncode != 0:
         return False
-    return any(line.split()[0] == current_id for line in scanned.stdout.splitlines() if line.strip())
+    return any(
+        line.split()[0] == current_id for line in scanned.stdout.splitlines() if line.strip()
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -171,6 +198,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--body-file")
     parser.add_argument("--tests-passed", required=True, choices=("true", "false"))
     parser.add_argument("--ai-review", required=True, choices=("pass", "findings", "missing"))
+    parser.add_argument("--static-audit", default="pass", choices=("pass", "findings"))
     parser.add_argument("--test-attempts", type=int, default=1)
     parser.add_argument("--out")
     args = parser.parse_args(argv)
@@ -187,6 +215,7 @@ def main(argv: list[str] | None = None) -> int:
         ai_review=args.ai_review,
         duplicate=git_duplicate(args.base, args.head),
         test_attempts=args.test_attempts,
+        static_audit=args.static_audit,
     )
     text = json.dumps(verdict, indent=2, sort_keys=True) + "\n"
     if args.out:
