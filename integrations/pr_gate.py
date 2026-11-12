@@ -246,6 +246,7 @@ def main(argv: list[str] | None = None) -> int:
         "--required-checks-passed", choices=("true", "false"), default="true"
     )
     parser.add_argument("--pr-number", default="0")
+    parser.add_argument("--head-sha", help="PR head commit SHA for receipt identity")
     parser.add_argument("--run-url", default="")
     parser.add_argument("--out")
     parser.add_argument("--receipt-out")
@@ -278,7 +279,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.ai_review is not None:
         decide_kwargs["ai_review"] = args.ai_review
     verdict = decide(**decide_kwargs)
-    head_sha = subprocess.run(
+    head_sha = args.head_sha or subprocess.run(
         ["git", "rev-parse", args.head],
         check=False,
         text=True,

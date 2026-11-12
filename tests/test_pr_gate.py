@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT))
 
 from integrations.pr_auditor import audit, resolve_independent_review  # noqa: E402
 from integrations.pr_gate import decide, git_files  # noqa: E402
-from integrations.pr_workflow_receipt import build_receipt  # noqa: E402
+from integrations.pr_workflow_receipt import build_receipt, record_merge  # noqa: E402
 
 
 class PrGateTests(unittest.TestCase):
@@ -107,6 +107,24 @@ class PrGateTests(unittest.TestCase):
         )
         self.assertIn("credentials", {f["code"] for f in auditor["findings"]})
 
+    def test_quoted_shell_destructive_commands_are_flagged(self):
+        auditor = audit(
+            files=["docs/runbook.md"],
+            diff_text='+++ b/docs/runbook.md\n@@\n+bash -c "rm -rf /srv/data"\n',
+        )
+        self.assertIn(
+            "destructive_operation", {f["code"] for f in auditor["findings"]}
+        )
+        self.assertFalse(
+            decide(
+                files=["docs/runbook.md"],
+                diff_text='+++ b/docs/runbook.md\n@@\n+bash -c "rm -rf /srv/data"\n',
+                tests_passed=True,
+                codex_status="missing",
+                duplicate=False,
+            )["merge_allowed"]
+        )
+
     def test_kernel_code_is_not_auto_merged(self):
         verdict = decide(
             files=["core/lequtis.py"],
@@ -172,6 +190,15 @@ class PrGateTests(unittest.TestCase):
         self.assertEqual(receipt["payload"]["task_id"], "eng-pr-99")
         self.assertTrue(receipt["payload"]["correlation_id"].startswith("pr-99-"))
         self.assertFalse(receipt["live_hermes"])
+        merged = record_merge(receipt, "mergecafe00")
+        self.assertTrue(merged["result"]["merged"])
+        self.assertEqual(merged["result"]["merge_sha"], "mergecafe00")
+        self.assertEqual(
+            merged["payload"]["result_sha256"],
+            __import__("integrations.pr_workflow_receipt", fromlist=["result_sha256"]).result_sha256(
+                merged["result"]
+            ),
+        )
 
     def test_git_diff_detects_an_empty_range(self):
         with tempfile.TemporaryDirectory() as tmp:

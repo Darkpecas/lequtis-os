@@ -92,3 +92,18 @@ def build_receipt(
         "live_telegram": False,
         "canonical_bytes_sha256": hashlib.sha256(_canonical(payload)).hexdigest(),
     }
+
+
+def record_merge(receipt: dict[str, Any], merge_sha: str) -> dict[str, Any]:
+    """Update a receipt after merge and recompute integrity digests."""
+    result = dict(receipt.get("result") or {})
+    result["merge_sha"] = merge_sha
+    result["merged"] = True
+    payload = dict(receipt.get("payload") or {})
+    payload["status"] = "completed"
+    payload["result_sha256"] = result_sha256(result)
+    updated = dict(receipt)
+    updated["result"] = result
+    updated["payload"] = payload
+    updated["canonical_bytes_sha256"] = hashlib.sha256(_canonical(payload)).hexdigest()
+    return updated

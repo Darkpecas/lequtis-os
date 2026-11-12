@@ -60,6 +60,32 @@ def _without_string_literals(line: str) -> str:
     return _STRING_LITERAL.sub("", line)
 
 
+def _is_doc_or_marker_definition(line: str, pattern: re.Pattern[str]) -> bool:
+    """True when a destructive match is documentation or a marker list, not code."""
+    if re.search(r"(?i)\b(DESTRUCTIVE[_A-Z0-9]*|NEEDLES|MARKERS|BLOCK_RULES)\s*=", line):
+        return True
+    if re.match(r"^\s*[\'\"`].*[\'\"`],?\s*$", line):
+        return True
+    without = _without_string_literals(line)
+    if pattern.search(without):
+        return False
+    # Match lived only inside quotes/backticks. Still flag shell/SQL wrappers.
+    if re.search(r"(?i)\b(bash|sh|zsh|cmd|powershell|subprocess|os\.system|popen|exec|sql)\b", without):
+        return False
+    return True
+
+
+def _destructive_hits(line: str) -> list[str]:
+    hits: list[str] = []
+    for label, pattern in DESTRUCTIVE_NEEDLES:
+        if not pattern.search(line):
+            continue
+        if _is_doc_or_marker_definition(line, pattern):
+            continue
+        hits.append(label)
+    return hits
+
+
 def _looks_like_secret_assignment(line: str) -> bool:
     """True only for literal credential assignments, not code/docs/Actions refs."""
     match = _SECRET_LINE.match(line)
@@ -139,10 +165,8 @@ def audit(
                 break
 
     for line in added:
-        stripped = _without_string_literals(line)
-        for label, pattern in DESTRUCTIVE_NEEDLES:
-            if pattern.search(stripped):
-                findings.append({"code": "destructive_operation", "detail": label})
+        for label in _destructive_hits(line):
+            findings.append({"code": "destructive_operation", "detail": label})
         if _looks_like_secret_assignment(line):
             findings.append(
                 {
