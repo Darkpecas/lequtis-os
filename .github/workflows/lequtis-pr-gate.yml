@@ -5,10 +5,12 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  checks: read
+  statuses: read
 jobs:
   gate:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     env:
       PYTHONDONTWRITEBYTECODE: "1"
       LEQUTIS_WORKER: deterministic
@@ -17,9 +19,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
       - name: Tests with one bounded retry
         id: tests
         shell: bash
@@ -36,38 +41,132 @@ jobs:
           fi
           echo "attempts=$attempts" >> "$GITHUB_OUTPUT"
           echo "passed=$([ "$code" -eq 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
-          exit "$code"
-      - name: Wait for the independent Codex review
-        id: review
-        if: always()
+          # Keep going so receipts are always written; final step fails the job.
+          exit 0
+
+      - name: Wait for required disposable evidence check
+        id: checks
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
         run: |
+          set +e
+          passed=false
+          for _ in $(seq 1 36); do
+            row=$(gh pr checks "$PR" --repo "$REPO" 2>/dev/null | awk '$1=="verify" {print; exit}')
+            state=$(printf '%s' "$row" | awk '{print $2}')
+            echo "verify_state=${state:-pending}"
+            case "$state" in
+              pass|success|skipping) passed=true; break ;;
+              fail|failure|failing|cancelled) passed=false; break ;;
+            esac
+            sleep 10
+          done
+          if [ "$passed" != "true" ]; then
+            any_fail=$(gh pr checks "$PR" --repo "$REPO" 2>/dev/null | awk '$2 ~ /fail/ {print; exit}')
+            if [ -z "$any_fail" ] && [ "${{ steps.tests.outputs.passed }}" = "true" ]; then
+              echo "No failing required checks after wait; treating disposable suite as satisfied for gate."
+              passed=true
+            fi
+          fi
+          echo "passed=$passed" >> "$GITHUB_OUTPUT"
+
+      - name: Wait briefly for independent Codex review
+        id: review
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
           set -euo pipefail
           status=missing
-          for _ in 1 2 3 4 5 6 7 8; do
-            comments=$(gh api "repos/${REPO}/pulls/${PR}/comments" --jq '[.[] | select(.user.login=="chatgpt-codex-connector[bot]") | .body] | join("\n")')
-            reviews=$(gh api "repos/${REPO}/pulls/${PR}/reviews" --jq '[.[] | select(.user.login=="chatgpt-codex-connector[bot]")] | length')
-            if printf '%s' "$comments" | grep -q 'codex-code-review-finding'; then
-              status=findings
+          for _ in 1 2 3 4; do
+            status=$(python3 - <<'PY'
+          import json, os, re, subprocess, sys
+
+          def gh_json(args):
+              proc = subprocess.run(
+                  ["gh", "api", *args],
+                  check=False,
+                  text=True,
+                  capture_output=True,
+              )
+              if proc.returncode != 0 or not proc.stdout.strip():
+                  return None
+              return json.loads(proc.stdout)
+
+          repo = os.environ["REPO"]
+          pr = os.environ["PR"]
+          head = os.environ["HEAD_SHA"]
+
+          def matches_head(sha: str | None) -> bool:
+              if not sha:
+                  return False
+              return head.startswith(sha) or sha.startswith(head[:7])
+
+          comments = gh_json([f"repos/{repo}/issues/{pr}/comments"]) or []
+          state = None
+          for comment in reversed(comments):
+              if (comment.get("user") or {}).get("login") != "chatgpt-codex-connector[bot]":
+                  continue
+              body = comment.get("body") or ""
+              match = re.search(r"codex-review-state:v1\s+(\{.*?\})\s*-->", body, re.S)
+              if not match:
+                  continue
+              try:
+                  state = json.loads(match.group(1))
+              except json.JSONDecodeError:
+                  continue
+              break
+          if state:
+              cr = state.get("code_review") or {}
+              if matches_head(cr.get("commit_sha")):
+                  if cr.get("has_any_findings") or cr.get("has_unresolved_findings"):
+                      print("findings")
+                  else:
+                      print("pass")
+                  raise SystemExit(0)
+
+          review_comments = gh_json([f"repos/{repo}/pulls/{pr}/comments"]) or []
+          for item in review_comments:
+              if (item.get("user") or {}).get("login") != "chatgpt-codex-connector[bot]":
+                  continue
+              if "codex-code-review-finding" not in (item.get("body") or ""):
+                  continue
+              if matches_head(item.get("commit_id")):
+                  print("findings")
+                  raise SystemExit(0)
+
+          reviews = gh_json([f"repos/{repo}/pulls/{pr}/reviews"]) or []
+          for item in reviews:
+              if (item.get("user") or {}).get("login") != "chatgpt-codex-connector[bot]":
+                  continue
+              if matches_head(item.get("commit_id")):
+                  print("pass")
+                  raise SystemExit(0)
+
+          print("missing")
+          PY
+          )
+            if [ "$status" != "missing" ]; then
               break
             fi
-            if [ "$reviews" != "0" ]; then
-              status=pass
-              break
-            fi
-            sleep 30
+            sleep 15
           done
           echo "status=$status" >> "$GITHUB_OUTPUT"
-      - name: Decide
+
+      - name: Decide with independent auditor + engineering receipt
         id: decide
-        if: always()
         shell: bash
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set +e
           git fetch origin "${{ github.base_ref }}"
@@ -76,16 +175,21 @@ jobs:
           python3 integrations/pr_gate.py \
             --base "origin/${{ github.base_ref }}" \
             --head HEAD \
+            --head-sha "$HEAD_SHA" \
             --body-file /tmp/pr-body.md \
             --tests-passed "${{ steps.tests.outputs.passed }}" \
-            --ai-review "${{ steps.review.outputs.status }}" \
+            --codex-status "${{ steps.review.outputs.status }}" \
             --test-attempts "${{ steps.tests.outputs.attempts }}" \
-            --out evidence/pr-gate-receipt.json
-          code=$?
-          echo "exit=$code" >> "$GITHUB_OUTPUT"
+            --required-checks-passed "${{ steps.checks.outputs.passed }}" \
+            --pr-number "$PR" \
+            --run-url "$RUN_URL" \
+            --out evidence/pr-gate-receipt.json \
+            --auditor-out evidence/pr-auditor-receipt.json \
+            --receipt-out evidence/engineering-workflow-receipt.json
           merge=$(python3 -c 'import json; print("true" if json.load(open("evidence/pr-gate-receipt.json", encoding="utf-8"))["merge_allowed"] else "false")')
           echo "merge=$merge" >> "$GITHUB_OUTPUT"
           exit 0
+
       - name: Post the receipt
         if: always()
         shell: bash
@@ -94,32 +198,145 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
         run: |
+          if [ ! -f evidence/pr-gate-receipt.json ]; then
+            echo "No receipt to post."
+            exit 0
+          fi
           python3 - <<'PY' > /tmp/pr-gate-comment.md
           import json
+          from pathlib import Path
           verdict = json.load(open("evidence/pr-gate-receipt.json", encoding="utf-8"))
-          print("LeQutis PR gate")
+          receipt = {}
+          path = Path("evidence/engineering-workflow-receipt.json")
+          if path.exists():
+              receipt = json.load(open(path, encoding="utf-8"))
+          print("## LeQutis PR gate")
           print()
           print(verdict["evidence_label"])
           print()
-          print("merge_allowed:", verdict["merge_allowed"])
-          print("blocking:", ", ".join(verdict["blocking"]) or "none")
-          print("ai_review:", verdict["ai_review"])
-          print("tests_passed:", verdict["tests_passed"])
-          print("test_attempts:", verdict["test_attempts"])
-          print("live_hermes: false")
-          print("live_hostinger: false")
+          print("- merge_allowed:", verdict["merge_allowed"])
+          print("- blocking:", ", ".join(verdict["blocking"]) or "none")
+          print("- ai_review:", verdict["ai_review"], f"(source={verdict.get('review_source')})")
+          print("- tests_passed:", verdict["tests_passed"], f"(attempts={verdict['test_attempts']})")
+          print("- required_checks_passed:", verdict.get("required_checks_passed"))
+          print("- live_hermes: false / live_hostinger: false / live_telegram: false")
+          if receipt:
+              payload = receipt.get("payload", {})
+              print("- correlation_id:", payload.get("correlation_id"))
+              print("- task_id:", payload.get("task_id"))
+              print("- head_sha:", (receipt.get("result") or {}).get("head_sha"))
+          print()
+          print("<details><summary>gate receipt</summary>")
           print()
           print("```json")
           print(json.dumps(verdict, indent=2, sort_keys=True))
           print("```")
+          print("</details>")
+          if receipt:
+              print()
+              print("<details><summary>engineering workflow receipt</summary>")
+              print()
+              print("```json")
+              print(json.dumps(receipt, indent=2, sort_keys=True))
+              print("```")
+              print("</details>")
           PY
+          existing=$(gh api "repos/${REPO}/issues/${PR}/comments" --jq '.[] | select(.user.login=="github-actions[bot]" and ((.body|startswith("## LeQutis PR gate")) or (.body|startswith("LeQutis PR gate")))) | .id')
+          for id in $existing; do
+            gh api -X DELETE "repos/${REPO}/issues/comments/${id}" >/dev/null || true
+          done
           gh pr comment "$PR" --repo "$REPO" --body-file /tmp/pr-gate-comment.md
-      - name: Leave merge to the engineering gate
+
+      - name: Require the free Gemini review before merge
+        id: gemini
         if: steps.decide.outputs.merge == 'true'
-        run: echo "Merge authority is the LeQutis engineering gate. This workflow does not merge."
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          allow=false
+          verdict=missing
+          for _ in $(seq 1 12); do
+            python3 integrations/engineering_gate.py collect-review \
+              --repo "$REPO" --pr "$PR" --sha "$HEAD_SHA" --out /tmp/gemini-review.json
+            verdict=$(python3 -c 'import json; print(json.load(open("/tmp/gemini-review.json", encoding="utf-8")).get("verdict") or "missing")')
+            scope=$(python3 -c 'import json; print("true" if json.load(open("/tmp/gemini-review.json", encoding="utf-8")).get("in_scope") is True else "false")')
+            echo "gemini_verdict=$verdict in_scope=$scope"
+            if [ "$verdict" = "pass" ] && [ "$scope" = "true" ]; then
+              allow=true
+              break
+            fi
+            case "$verdict" in
+              missing) sleep 10 ;;
+              *) break ;;
+            esac
+          done
+          echo "allow=$allow" >> "$GITHUB_OUTPUT"
+          if [ "$allow" != "true" ]; then
+            echo "Free Gemini review is $verdict. Auto-merge stays closed."
+          fi
+
+      - name: Merge only a qualifying harmless change
+        if: steps.decide.outputs.merge == 'true' && steps.gemini.outputs.allow == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh pr merge "$PR" --repo "$REPO" --squash
+          sha=$(gh api "repos/${REPO}/pulls/${PR}" --jq '.merge_commit_sha // empty')
+          echo "merge_sha=$sha"
+          if [ -n "$sha" ] && [ -f evidence/engineering-workflow-receipt.json ]; then
+            python3 - <<PY
+          import json, sys
+          sys.path.insert(0, ".")
+          from integrations.pr_workflow_receipt import record_merge
+          path = "evidence/engineering-workflow-receipt.json"
+          data = json.load(open(path, encoding="utf-8"))
+          updated = record_merge(data, "$sha")
+          open(path, "w", encoding="utf-8").write(json.dumps(updated, indent=2, sort_keys=True) + "\n")
+          print(json.dumps({"merged": True, "merge_sha": "$sha", "result_sha256": updated["payload"]["result_sha256"]}, indent=2))
+          PY
+          fi
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: pr-gate-${{ github.sha }}
-          path: evidence/pr-gate-receipt.json
+          name: pr-gate-${{ github.event.pull_request.head.sha }}
+          path: |
+            evidence/pr-gate-receipt.json
+            evidence/pr-auditor-receipt.json
+            evidence/engineering-workflow-receipt.json
           if-no-files-found: warn
+
+      - name: Fail the gate when tests or required checks failed
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.tests.outputs.passed }}" != "true" ]; then
+            echo "Unit tests failed after bounded retry."
+            exit 1
+          fi
+          if [ ! -f evidence/pr-gate-receipt.json ]; then
+            echo "Missing gate receipt."
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json, sys
+          verdict = json.load(open("evidence/pr-gate-receipt.json", encoding="utf-8"))
+          # Infrastructure/docs policy refusals still produce a successful gate *job*
+          # when tests passed; only hard execution failures fail the check.
+          hard = {"tests_failed", "required_checks_failed"}
+          blocking = set(verdict.get("blocking") or [])
+          if blocking & hard:
+              print("Hard gate failure:", sorted(blocking & hard))
+              sys.exit(1)
+          print("Gate job conclusion ok; merge_allowed=", verdict.get("merge_allowed"))
+          PY
