@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from integrations.pr_gate import decide, git_files  # noqa: E402
+from integrations.pr_gate import decide, destructive_markers, git_files, paths_from_name_status, review_status  # noqa: E402
 
 
 class PrGateTests(unittest.TestCase):
@@ -46,7 +46,7 @@ class PrGateTests(unittest.TestCase):
             self.assertIn("blocked_change", verdict["blocking"])
         destructive = decide(
             files=["docs/note.md"],
-            diff_text="DROP TABLE events;",
+            diff_text="diff --git a/docs/note.md\n+++ b/docs/note.md\n+DROP TABLE events;\n",
             tests_passed=True,
             ai_review="pass",
             duplicate=False,
@@ -91,6 +91,35 @@ class PrGateTests(unittest.TestCase):
         self.assertTrue(findings["repair"]["attempted"])
         self.assertEqual(findings["repair"]["max_attempts"], 2)
         self.assertIn("tests_failed", findings["blocking"])
+
+    def test_rename_source_is_not_hidden_and_denylist_text_is_not_destructive(self):
+        paths = paths_from_name_status([
+            "R100\truntime/hermes-stdio-connector/lequtis_mcp_stdio.py\tdocs/moved.md",
+        ])
+        verdict = decide(files=paths, tests_passed=True, ai_review="pass", duplicate=False)
+        self.assertIn("runtime/hermes-stdio-connector/lequtis_mcp_stdio.py", verdict["files"])
+        self.assertFalse(verdict["harmless"])
+        self.assertFalse(verdict["merge_allowed"])
+        markers = destructive_markers(
+            '+DESTRUCTIVE_MARKERS = (\n+    "DROP TABLE",\n+    "DROP DATABASE",\n'
+        )
+        self.assertEqual(markers, [])
+        self.assertEqual(destructive_markers("+\n+DROP TABLE events;\n"), ["DROP TABLE"])
+
+    def test_review_status_requires_the_current_head(self):
+        reviews = [{
+            "user": {"login": "chatgpt-codex-connector[bot]"},
+            "commit_id": "old",
+            "state": "COMMENTED",
+        }]
+        comments = [{
+            "user": {"login": "chatgpt-codex-connector[bot]"},
+            "commit_id": "old",
+            "body": "<!-- codex-code-review-finding:v1 -->",
+        }]
+        self.assertEqual(review_status(reviews, comments, "new"), "missing")
+        self.assertEqual(review_status(reviews, [], "old"), "pass")
+        self.assertEqual(review_status(reviews, comments, "old"), "findings")
 
     def test_git_diff_detects_an_empty_range(self):
         with tempfile.TemporaryDirectory() as tmp:
