@@ -9,6 +9,8 @@ plane when authorized; this workflow only emits assimilable receipts.
 
 ## Flow
 
+Auto-merge in this workflow also requires the free Gemini review (`gemini-3.8-flash`) for the same head SHA. A missing `LEQUTIS_REVIEWER_API_KEY` fails that review closed, so this workflow does not merge. `.github/workflows/lequtis-engineering-gate.yml` applies the denylist, including `infra/terraform/`, and posts the engineering receipt.
+
 `.github/workflows/lequtis-pr-gate.yml` runs on pull requests:
 
 1. Run the unit suite. On failure, run it once more and record both attempts.
