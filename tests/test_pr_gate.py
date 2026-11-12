@@ -49,13 +49,43 @@ class PrGateTests(unittest.TestCase):
             self.assertIn("blocked_change", verdict["blocking"])
         destructive = decide(
             files=["docs/note.md"],
-            diff_text="DROP TABLE events;",
+            diff_text="+++ b/docs/note.md\n+DROP TABLE events;\n",
             tests_passed=True,
             ai_review="pass",
             duplicate=False,
         )
         self.assertIn("DROP TABLE", destructive["destructive"])
         self.assertFalse(destructive["merge_allowed"])
+        listed_only = decide(
+            files=["docs/note.md"],
+            diff_text="+++ b/docs/note.md\n+DESTRUCTIVE_MARKERS = (\"DROP TABLE\",)\n",
+            tests_passed=True,
+            ai_review="pass",
+            duplicate=False,
+        )
+        self.assertIn("DROP TABLE", listed_only["destructive"])
+        context_only = decide(
+            files=["docs/note.md"],
+            diff_text="+++ b/docs/note.md\n-DROP TABLE events;\n+safe text\n",
+            tests_passed=True,
+            ai_review="pass",
+            duplicate=False,
+        )
+        self.assertEqual(context_only["destructive"], [])
+
+    def test_rename_source_paths_block_harmless_docs_claim(self):
+        verdict = decide(
+            files=[
+                "runtime/hermes-stdio-connector/lequtis_mcp_stdio.py",
+                "docs/example.md",
+            ],
+            tests_passed=True,
+            ai_review="pass",
+            static_audit="pass",
+            duplicate=False,
+        )
+        self.assertFalse(verdict["harmless"])
+        self.assertIn("blocked_change", verdict["blocking"])
 
     def test_kernel_code_is_not_auto_merged(self):
         verdict = decide(

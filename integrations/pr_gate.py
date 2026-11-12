@@ -69,7 +69,13 @@ def decide(
         reasons = _blocked(path)
         if reasons:
             blocked[path] = reasons
-    destructive = [marker for marker in DESTRUCTIVE_MARKERS if marker in diff_text]
+    # Only added lines count. The gate source itself lists these markers.
+    added = "\n".join(
+        line[1:]
+        for line in diff_text.splitlines()
+        if line.startswith("+") and not line.startswith("+++")
+    )
+    destructive = [marker for marker in DESTRUCTIVE_MARKERS if marker in added]
     harmless = (
         bool(files)
         and all(path.startswith(HARMLESS_PREFIX) and path.endswith(".md") for path in files)
@@ -125,8 +131,19 @@ def decide(
 
 
 def git_files(base: str, head: str, cwd: str | None = None) -> list[str]:
+    """Return every touched path, including rename sources.
+
+    Rename detection is disabled so a dangerous path moved into docs/ still
+    appears and fails the harmless-docs check.
+    """
     proc = subprocess.run(
-        ["git", "diff", "--name-only", f"{base}...{head}"],
+        [
+            "git",
+            "diff",
+            "--no-renames",
+            "--name-status",
+            f"{base}...{head}",
+        ],
         cwd=cwd,
         check=False,
         text=True,
@@ -134,12 +151,22 @@ def git_files(base: str, head: str, cwd: str | None = None) -> list[str]:
     )
     if proc.returncode != 0:
         raise RuntimeError(proc.stderr.strip() or "git diff failed")
-    return [line for line in proc.stdout.splitlines() if line.strip()]
+    paths: list[str] = []
+    seen: set[str] = set()
+    for line in proc.stdout.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("\t")
+        for path in parts[1:]:
+            if path and path not in seen:
+                seen.add(path)
+                paths.append(path)
+    return paths
 
 
 def git_diff(base: str, head: str) -> str:
     proc = subprocess.run(
-        ["git", "diff", f"{base}...{head}"],
+        ["git", "diff", "--no-renames", f"{base}...{head}"],
         check=False,
         text=True,
         capture_output=True,
@@ -152,7 +179,7 @@ def git_diff(base: str, head: str) -> str:
 def git_duplicate(base: str, head: str) -> bool:
     """True when this diff's stable patch-id already exists on base."""
     current = subprocess.run(
-        ["git", "diff", f"{base}...{head}"],
+        ["git", "diff", "--no-renames", f"{base}...{head}"],
         check=False,
         text=True,
         capture_output=True,

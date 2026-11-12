@@ -2,6 +2,9 @@ name: LeQutis PR gate
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+concurrency:
+  group: lequtis-pr-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 permissions:
   contents: write
   pull-requests: write
@@ -48,12 +51,23 @@ jobs:
           set +e
           git fetch origin "${{ github.base_ref }}"
           mkdir -p evidence
-          git diff --name-only "origin/${{ github.base_ref }}...HEAD" > /tmp/pr-files.txt
           python3 - <<'PY' > /tmp/pr-files.json
-          import json
-          print(json.dumps([line.strip() for line in open("/tmp/pr-files.txt", encoding="utf-8") if line.strip()]))
+          import json, subprocess
+          base = "origin/${{ github.base_ref }}"
+          proc = subprocess.run(
+              ["git", "diff", "--no-renames", "--name-status", f"{base}...HEAD"],
+              check=True, text=True, capture_output=True,
+          )
+          paths = []
+          seen = set()
+          for line in proc.stdout.splitlines():
+              for path in line.split("\t")[1:]:
+                  if path and path not in seen:
+                      seen.add(path)
+                      paths.append(path)
+          print(json.dumps(paths))
           PY
-          git diff "origin/${{ github.base_ref }}...HEAD" > /tmp/pr.diff
+          git diff --no-renames "origin/${{ github.base_ref }}...HEAD" > /tmp/pr.diff
           printf '%s' "$PR_BODY" > /tmp/pr-body.md
           python3 integrations/pr_static_auditor.py \
             --files-json "$(cat /tmp/pr-files.json)" \
@@ -72,27 +86,37 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           status=missing
           for _ in 1 2 3 4 5 6 7 8; do
-            comments=$(gh api "repos/${REPO}/pulls/${PR}/comments" --jq '[.[] | select(.user.login=="chatgpt-codex-connector[bot]") | .body] | join("\n")')
-            issue_comments=$(gh api "repos/${REPO}/issues/${PR}/comments" --jq '[.[] | select(.user.login=="chatgpt-codex-connector[bot]") | .body] | join("\n")')
-            reviews=$(gh api "repos/${REPO}/pulls/${PR}/reviews" --jq '[.[] | select(.user.login=="chatgpt-codex-connector[bot]")] | length')
-            all_text=$(printf '%s\n%s' "$comments" "$issue_comments")
+            # Only accept review state for the current PR head SHA.
+            summary=$(gh api "repos/${REPO}/issues/${PR}/comments" --jq \
+              --arg sha "$HEAD_SHA" \
+              '[.[] | select(.user.login=="chatgpt-codex-connector[bot]") | select(.body|contains($sha)) | .body] | join("\n")')
+            findings=$(gh api "repos/${REPO}/pulls/${PR}/comments" --jq \
+              --arg sha "$HEAD_SHA" \
+              '[.[] | select(.user.login=="chatgpt-codex-connector[bot]") | select(.original_commit_id==$sha or .commit_id==$sha) | .body] | join("\n")')
+            reviews=$(gh api "repos/${REPO}/pulls/${PR}/reviews" --jq \
+              --arg sha "$HEAD_SHA" \
+              '[.[] | select(.user.login=="chatgpt-codex-connector[bot]") | select(.commit_id==$sha)] | length')
+            all_text=$(printf '%s\n%s' "$summary" "$findings")
             if printf '%s' "$all_text" | grep -q 'codex-code-review-finding'; then
               status=findings
               break
             fi
-            if printf '%s' "$all_text" | grep -q 'codex-review-state:v1' && printf '%s' "$all_text" | grep -q '"status":"completed"'; then
-              if printf '%s' "$all_text" | grep -q '"has_any_findings":true'; then
+            if printf '%s' "$summary" | grep -q 'codex-review-state:v1' \
+              && printf '%s' "$summary" | grep -q "\"commit_sha\":\"${HEAD_SHA}\"" \
+              && printf '%s' "$summary" | grep -q '"status":"completed"'; then
+              if printf '%s' "$summary" | grep -q '"has_any_findings":true'; then
                 status=findings
               else
                 status=pass
               fi
               break
             fi
-            if [ "$reviews" != "0" ]; then
+            if [ "$reviews" != "0" ] && ! printf '%s' "$all_text" | grep -q 'codex-code-review-finding'; then
               status=pass
               break
             fi
@@ -186,9 +210,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          gh pr merge "$PR" --repo "$REPO" --squash
+          gh pr merge "$PR" --repo "$REPO" --squash --match-head-commit "$HEAD_SHA"
           echo "result=merged" >> "$GITHUB_OUTPUT"
       - name: Update workflow receipt after merge attempt
         if: always() && steps.decide.outputs.merge == 'true'
