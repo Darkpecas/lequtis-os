@@ -1,5 +1,8 @@
 # Engineering gate
 
+> **SECURITY HOLD — 2026-11-12:** Automated merges and automated repair pushes are disabled in this repository's GitHub Actions workflows. The former auto-merge criteria below are retained as historical policy/decision evidence, **not as an operating merge authorization**. Assessment is read-only; receipts are uploaded as artifacts. Every merge requires an explicitly authorized manual action and separate review. Do not re-enable auto-merge or credentialed PR-head code until independent adversarial verification of a trusted base-controlled authority, symlink and file-mode checks, full check pagination, and reviewer provenance. This change does not verify live Hostinger/Hermes.
+
+
 LeQutis decides. The independent reviewer, GitHub Actions, Hermes, and Telegram are subordinate resources. None of them is a merge authority. A review comment is not an approval.
 
 LOCAL PROOF, NOT LIVE VPS VERIFIED. A green run does not prove live Hostinger or a live Hermes route.

@@ -12,8 +12,8 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
-      pull-requests: write
-      issues: write
+      pull-requests: read
+      issues: read
     outputs:
       merge: ${{ steps.decide.outputs.merge }}
       repair: ${{ steps.decide.outputs.repair }}
@@ -38,10 +38,6 @@ jobs:
           SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           GH_TOKEN: ${{ github.token }}
-          LEQUTIS_TUNNEL_ID: ${{ secrets.LEQUTIS_TUNNEL_ID }}
-          LEQUTIS_TUNNEL_API_KEY: ${{ secrets.LEQUTIS_TUNNEL_API_KEY }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           set -euo pipefail
           git fetch origin "$BASE_REF"
@@ -74,26 +70,6 @@ jobs:
             --out evidence/engineering-receipt.json
           python3 integrations/engineering_gate.py outputs \
             --receipt evidence/engineering-receipt.json
-      - name: Post the receipt
-        if: always()
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
-        run: |
-          python3 integrations/engineering_gate.py comment \
-            --repo "$REPO" --pr "$PR" --receipt evidence/engineering-receipt.json
-      - name: Sync the needs-human label
-        if: always()
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
-        run: |
-          needed=$(python3 -c 'import json; print("true" if json.load(open("evidence/engineering-receipt.json"))["risk"]["needs_human"] else "false")')
-          python3 integrations/engineering_gate.py label --repo "$REPO" --pr "$PR" --needed "$needed"
       - name: Upload the receipt
         if: always()
         uses: actions/upload-artifact@v4
@@ -101,113 +77,7 @@ jobs:
           name: lequtis-engineering-receipt-${{ github.run_id }}
           path: evidence/engineering-receipt.json
           if-no-files-found: warn
-      - name: Hold when merge is not allowed
-        if: steps.decide.outputs.merge != 'true'
-        run: exit 1
-
-  repair:
-    needs: assess
-    if: always() && needs.assess.outputs.repair == 'true' && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: write
-      pull-requests: read
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref }}
-          fetch-depth: 0
-          persist-credentials: true
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Apply at most one recoverable fix
-        env:
-          BASE_REF: ${{ github.base_ref }}
-          HEAD_REF: ${{ github.head_ref }}
-        run: |
-          set -euo pipefail
-          git fetch origin "$BASE_REF"
-          mkdir -p evidence
-          python3 -m unittest discover -s tests -p 'test_*.py' -q > evidence/repair-log.txt 2>&1 || true
-          python3 integrations/engineering_gate.py prepare-repair \
-            --base "origin/${BASE_REF}" \
-            --out evidence/repair-request.json
-          python3 integrations/engineering_gate.py plan-repair \
-            --request evidence/repair-request.json \
-            --log-file evidence/repair-log.txt \
-            --out evidence/repair-plan.json
-          if ! python3 integrations/engineering_gate.py apply-repair \
-            --plan evidence/repair-plan.json \
-            --message evidence/repair-message.txt > evidence/repair-paths.txt; then
-            echo "no fix commit"
-            exit 0
-          fi
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git config user.name "github-actions[bot]"
-          git add --pathspec-from-file evidence/repair-paths.txt
-          git commit -F evidence/repair-message.txt
-          git push origin "HEAD:${HEAD_REF}"
-          git rev-parse HEAD
-
-  merge:
-    needs: assess
-    if: needs.assess.result == 'success' && needs.assess.outputs.merge == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: write
-      pull-requests: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: true
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Download the receipt
-        uses: actions/download-artifact@v4
-        with:
-          name: lequtis-engineering-receipt-${{ github.run_id }}
-          path: evidence
-      - name: Squash merge and read the default branch back
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          receipt=$(find evidence -name engineering-receipt.json | head -n 1)
-          if [ -z "$receipt" ]; then
-            echo "receipt artifact missing"
-            exit 1
-          fi
-          cp "$receipt" evidence/engineering-receipt.json
-          decision=$(python3 -c 'import json; print(json.load(open("evidence/engineering-receipt.json"))["merge_decision"])')
-          if [ "$decision" != "merge" ]; then
-            echo "receipt does not allow merge"
-            exit 1
-          fi
-          set +e
-          gh pr merge "$PR" --repo "$REPO" --squash --match-head-commit "$HEAD_SHA" >/tmp/merge.out 2>/tmp/merge.err
-          code=$?
-          set -e
-          python3 integrations/engineering_gate.py read-back \
-            --repo "$REPO" \
-            --pr "$PR" \
-            --receipt evidence/engineering-receipt.json \
-            --merge-exit "$code" \
-            --merge-stderr /tmp/merge.err \
-            --out evidence/engineering-receipt.json
-          python3 integrations/engineering_gate.py comment \
-            --repo "$REPO" --pr "$PR" --receipt evidence/engineering-receipt.json
-          python3 -c 'import json,sys; receipt=json.load(open("evidence/engineering-receipt.json")); sys.exit(0 if receipt["read_back"]["confirmed"] else 1)'
-      - uses: actions/upload-artifact@v4
+      - name: Require an evidence receipt
         if: always()
-        with:
-          name: lequtis-engineering-receipt-final-${{ github.run_id }}
-          path: evidence/engineering-receipt.json
-          if-no-files-found: warn
+        run: test -s evidence/engineering-receipt.json
+

@@ -4,7 +4,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
 permissions:
   contents: read
-  pull-requests: write
+  pull-requests: read
   checks: read
   statuses: read
 jobs:
@@ -59,18 +59,11 @@ jobs:
             state=$(printf '%s' "$row" | awk '{print $2}')
             echo "verify_state=${state:-pending}"
             case "$state" in
-              pass|success|skipping) passed=true; break ;;
+              pass|success) passed=true; break ;;
               fail|failure|failing|cancelled) passed=false; break ;;
             esac
             sleep 10
           done
-          if [ "$passed" != "true" ]; then
-            any_fail=$(gh pr checks "$PR" --repo "$REPO" 2>/dev/null | awk '$2 ~ /fail/ {print; exit}')
-            if [ -z "$any_fail" ] && [ "${{ steps.tests.outputs.passed }}" = "true" ]; then
-              echo "No failing required checks after wait; treating disposable suite as satisfied for gate."
-              passed=true
-            fi
-          fi
           echo "passed=$passed" >> "$GITHUB_OUTPUT"
 
       - name: Wait briefly for independent Codex review
@@ -189,121 +182,6 @@ jobs:
           merge=$(python3 -c 'import json; print("true" if json.load(open("evidence/pr-gate-receipt.json", encoding="utf-8"))["merge_allowed"] else "false")')
           echo "merge=$merge" >> "$GITHUB_OUTPUT"
           exit 0
-
-      - name: Post the receipt
-        if: always()
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
-        run: |
-          if [ ! -f evidence/pr-gate-receipt.json ]; then
-            echo "No receipt to post."
-            exit 0
-          fi
-          python3 - <<'PY' > /tmp/pr-gate-comment.md
-          import json
-          from pathlib import Path
-          verdict = json.load(open("evidence/pr-gate-receipt.json", encoding="utf-8"))
-          receipt = {}
-          path = Path("evidence/engineering-workflow-receipt.json")
-          if path.exists():
-              receipt = json.load(open(path, encoding="utf-8"))
-          print("## LeQutis PR gate")
-          print()
-          print(verdict["evidence_label"])
-          print()
-          print("- merge_allowed:", verdict["merge_allowed"])
-          print("- blocking:", ", ".join(verdict["blocking"]) or "none")
-          print("- ai_review:", verdict["ai_review"], f"(source={verdict.get('review_source')})")
-          print("- tests_passed:", verdict["tests_passed"], f"(attempts={verdict['test_attempts']})")
-          print("- required_checks_passed:", verdict.get("required_checks_passed"))
-          print("- live_hermes: false / live_hostinger: false / live_telegram: false")
-          if receipt:
-              payload = receipt.get("payload", {})
-              print("- correlation_id:", payload.get("correlation_id"))
-              print("- task_id:", payload.get("task_id"))
-              print("- head_sha:", (receipt.get("result") or {}).get("head_sha"))
-          print()
-          print("<details><summary>gate receipt</summary>")
-          print()
-          print("```json")
-          print(json.dumps(verdict, indent=2, sort_keys=True))
-          print("```")
-          print("</details>")
-          if receipt:
-              print()
-              print("<details><summary>engineering workflow receipt</summary>")
-              print()
-              print("```json")
-              print(json.dumps(receipt, indent=2, sort_keys=True))
-              print("```")
-              print("</details>")
-          PY
-          existing=$(gh api "repos/${REPO}/issues/${PR}/comments" --jq '.[] | select(.user.login=="github-actions[bot]" and ((.body|startswith("## LeQutis PR gate")) or (.body|startswith("LeQutis PR gate")))) | .id')
-          for id in $existing; do
-            gh api -X DELETE "repos/${REPO}/issues/comments/${id}" >/dev/null || true
-          done
-          gh pr comment "$PR" --repo "$REPO" --body-file /tmp/pr-gate-comment.md
-
-      - name: Require the free Gemini review before merge
-        id: gemini
-        if: steps.decide.outputs.merge == 'true'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          allow=false
-          verdict=missing
-          for _ in $(seq 1 12); do
-            python3 integrations/engineering_gate.py collect-review \
-              --repo "$REPO" --pr "$PR" --sha "$HEAD_SHA" --out /tmp/gemini-review.json
-            verdict=$(python3 -c 'import json; print(json.load(open("/tmp/gemini-review.json", encoding="utf-8")).get("verdict") or "missing")')
-            scope=$(python3 -c 'import json; print("true" if json.load(open("/tmp/gemini-review.json", encoding="utf-8")).get("in_scope") is True else "false")')
-            echo "gemini_verdict=$verdict in_scope=$scope"
-            if [ "$verdict" = "pass" ] && [ "$scope" = "true" ]; then
-              allow=true
-              break
-            fi
-            case "$verdict" in
-              missing) sleep 10 ;;
-              *) break ;;
-            esac
-          done
-          echo "allow=$allow" >> "$GITHUB_OUTPUT"
-          if [ "$allow" != "true" ]; then
-            echo "Free Gemini review is $verdict. Auto-merge stays closed."
-          fi
-
-      - name: Merge only a qualifying harmless change
-        if: steps.decide.outputs.merge == 'true' && steps.gemini.outputs.allow == 'true'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          gh pr merge "$PR" --repo "$REPO" --squash
-          sha=$(gh api "repos/${REPO}/pulls/${PR}" --jq '.merge_commit_sha // empty')
-          echo "merge_sha=$sha"
-          if [ -n "$sha" ] && [ -f evidence/engineering-workflow-receipt.json ]; then
-            python3 - <<PY
-          import json, sys
-          sys.path.insert(0, ".")
-          from integrations.pr_workflow_receipt import record_merge
-          path = "evidence/engineering-workflow-receipt.json"
-          data = json.load(open(path, encoding="utf-8"))
-          updated = record_merge(data, "$sha")
-          open(path, "w", encoding="utf-8").write(json.dumps(updated, indent=2, sort_keys=True) + "\n")
-          print(json.dumps({"merged": True, "merge_sha": "$sha", "result_sha256": updated["payload"]["result_sha256"]}, indent=2))
-          PY
-          fi
 
       - uses: actions/upload-artifact@v4
         if: always()
