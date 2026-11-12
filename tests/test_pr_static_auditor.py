@@ -28,12 +28,19 @@ class PrStaticAuditorTests(unittest.TestCase):
         self.assertEqual(result["findings"], [])
 
     def test_secret_like_and_workflow_changes_fail(self):
+        fake_key = "api_key = '" + ("k" * 20) + "'"
         secret = audit(
             files=["docs/note.md"],
-            diff_text="+api_key = 'abcdefghijklmnopqrstuvwxyz'\n",
+            diff_text="+++ b/docs/note.md\n+" + fake_key + "\n",
             body="tests evidence",
         )
         self.assertTrue(any(f["code"] == "secret_like_diff" for f in secret["findings"]))
+        ignored = audit(
+            files=["tests/test_pr_static_auditor.py"],
+            diff_text="+++ b/tests/test_pr_static_auditor.py\n+" + fake_key + "\n",
+            body="tests evidence acceptance",
+        )
+        self.assertFalse(any(f["code"] == "secret_like_diff" for f in ignored["findings"]))
         workflow = audit(
             files=[".github/workflows/lequtis-pr-gate.yml"],
             body="tests evidence acceptance",

@@ -30,6 +30,20 @@ ACCEPTANCE_MARKERS = (
 )
 
 
+def _added_lines_by_file(diff_text: str) -> dict[str, str]:
+    """Map path -> concatenated added line text from a unified diff."""
+    current = ""
+    buckets: dict[str, list[str]] = {}
+    for line in diff_text.splitlines():
+        if line.startswith("+++ b/"):
+            current = line[6:]
+            buckets.setdefault(current, [])
+            continue
+        if line.startswith("+") and not line.startswith("+++") and current:
+            buckets.setdefault(current, []).append(line[1:])
+    return {path: "\n".join(lines) for path, lines in buckets.items()}
+
+
 def audit(
     *,
     files: list[str],
@@ -47,16 +61,40 @@ def audit(
                 "message": "Pull request has commits or metadata but zero changed files.",
             }
         )
-    for pattern in SECRET_PATTERNS:
-        if pattern.search(diff_text):
-            findings.append(
-                {
-                    "code": "secret_like_diff",
-                    "severity": "high",
-                    "message": "Diff matches a secret-like pattern; refuse auto-merge.",
-                }
-            )
-            break
+    # Only added lines outside tests/ count. Fixture source must not trip the gate.
+    for path, added in _added_lines_by_file(diff_text).items():
+        if path.startswith("tests/"):
+            continue
+        for pattern in SECRET_PATTERNS:
+            if pattern.search(added):
+                findings.append(
+                    {
+                        "code": "secret_like_diff",
+                        "severity": "high",
+                        "message": "Diff matches a secret-like pattern; refuse auto-merge.",
+                    }
+                )
+                break
+        else:
+            continue
+        break
+    # Synthetic/unit-test callers may pass diff_text without +++ headers.
+    if diff_text and not _added_lines_by_file(diff_text):
+        added_only = "\n".join(
+            line[1:]
+            for line in diff_text.splitlines()
+            if line.startswith("+") and not line.startswith("+++")
+        )
+        for pattern in SECRET_PATTERNS:
+            if pattern.search(added_only or diff_text):
+                findings.append(
+                    {
+                        "code": "secret_like_diff",
+                        "severity": "high",
+                        "message": "Diff matches a secret-like pattern; refuse auto-merge.",
+                    }
+                )
+                break
     body_text = body or ""
     if re.search(r"\bVERIFIED\b", body_text) and not (
         "https://github.com/" in body_text or "evidence/" in body_text

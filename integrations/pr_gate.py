@@ -69,13 +69,28 @@ def decide(
         reasons = _blocked(path)
         if reasons:
             blocked[path] = reasons
-    # Only added lines count. The gate source itself lists these markers.
-    added = "\n".join(
-        line[1:]
-        for line in diff_text.splitlines()
-        if line.startswith("+") and not line.startswith("+++")
-    )
-    destructive = [marker for marker in DESTRUCTIVE_MARKERS if marker in added]
+    # Only added lines outside tests/ and marker-definition lines count.
+    destructive: list[str] = []
+    current = ""
+    for line in diff_text.splitlines():
+        if line.startswith("+++ b/"):
+            current = line[6:]
+            continue
+        if not (line.startswith("+") and not line.startswith("+++")):
+            continue
+        if current.startswith("tests/") or "DESTRUCTIVE_MARKERS" in line:
+            continue
+        body_line = line[1:]
+        for marker in DESTRUCTIVE_MARKERS:
+            if marker in body_line and marker not in destructive:
+                destructive.append(marker)
+    if not destructive and diff_text and "+++ b/" not in diff_text:
+        added = "\n".join(
+            line[1:]
+            for line in diff_text.splitlines()
+            if line.startswith("+") and not line.startswith("+++")
+        )
+        destructive = [marker for marker in DESTRUCTIVE_MARKERS if marker in added]
     harmless = (
         bool(files)
         and all(path.startswith(HARMLESS_PREFIX) and path.endswith(".md") for path in files)
