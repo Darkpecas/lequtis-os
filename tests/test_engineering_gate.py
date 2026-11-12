@@ -49,10 +49,19 @@ def passing_request(**overrides):
             "- independent review passes\n"
         ),
         "checks": [
-            {"name": "verify", "status": "completed", "conclusion": "success", "html_url": "https://example.test/verify"},
-            {"name": "review", "status": "completed", "conclusion": "success", "html_url": "https://example.test/review"},
+            {"name": "verify", "status": "completed", "conclusion": "success", "head_sha": "abc", "html_url": "https://example.test/verify"},
+            {"name": "review", "status": "completed", "conclusion": "success", "head_sha": "abc", "html_url": "https://example.test/review"},
         ],
-        "review": {"verdict": "pass", "in_scope": True, "findings": [], "head_sha": "abc", "run_url": "https://example.test/review"},
+        "review": {
+            "verdict": "pass",
+            "in_scope": True,
+            "findings": [],
+            "head_sha": "abc",
+            "author": "github-actions[bot]",
+            "run_url": "https://example.test/review",
+        },
+        "labels": [],
+        "labels_verified": True,
         "duplicate": False,
         "duplicate_scan": "complete",
         "repairs": [],
@@ -281,6 +290,129 @@ class EngineeringGateTests(unittest.TestCase):
         self.assertIn("non-empty net diff", definition)
         self.assertIn("no duplicate", definition)
         self.assertIn("in scope", definition)
+
+    def test_needs_human_label_is_never_merged(self):
+        for labels in (["needs-human"], [{"name": "needs-human"}]):
+            decision = gate.authorize_auto_merge(passing_request(labels=labels, labels_verified=True))
+            self.assertFalse(decision["merge"], labels)
+            self.assertIn("needs_human_label", decision["reasons"])
+        unverified = gate.authorize_auto_merge(passing_request(labels_verified=False, labels=None))
+        self.assertFalse(unverified["merge"])
+        self.assertIn("labels_unverified", unverified["reasons"])
+        self.assertEqual(gate.sync_label("example/example", "1", False)["action"], "not_removed")
+
+    def test_docs_mixed_with_code_is_not_merged(self):
+        for files in (
+            ["docs/guide.md", "core/lequtis.py"],
+            ["README.md", "tests/test_pr_gate.py"],
+            ["docs/note.md", "integrations/pr_gate.py"],
+            ["docs/note.md", "infra/terraform/app.tf"],
+            ["docs/note.md", "GOLDEN_MASTER.json"],
+            ["docs/script.py"],
+            ["docs/config.yaml"],
+            ["docs/note.md", ".github/workflows/lequtis-pr-gate.yml"],
+        ):
+            decision = gate.authorize_auto_merge(passing_request(files=files, diff_text="+note\n"))
+            self.assertFalse(decision["merge"], files)
+            self.assertTrue(decision["label_needs_human"], files)
+            self.assertIn("not_docs_only", decision["reasons"])
+
+    def test_gate_or_workflow_change_is_not_merged(self):
+        for files in (
+            [".github/workflows/lequtis-engineering-gate.yml"],
+            [".github/workflows/lequtis-pr-gate.yml"],
+            ["integrations/engineering_gate.py"],
+            ["integrations/pr_gate.py"],
+            ["docs/engineering/ENGINEERING_GATE.md"],
+            ["docs/engineering/PR_GATE.md"],
+            ["tests/test_engineering_gate.py"],
+        ):
+            decision = gate.authorize_auto_merge(passing_request(files=files, diff_text="+note\n"))
+            self.assertFalse(decision["merge"], files)
+            self.assertTrue(decision["label_needs_human"], files)
+
+    def test_clean_docs_only_pr_is_eligible(self):
+        body = (
+            "task_id: disposable-automerge-proof\n\n"
+            "## Acceptance criteria\n"
+            "- The change is docs-only markdown\n"
+            "- The change adds no credentials\n"
+            "- tests pass\n"
+            "- independent review passes\n"
+        )
+        for files in (
+            ["docs/guide.md"],
+            ["README.md"],
+            ["docs/engineering/HARMLESS_AUTOMERGE_PROOF.md", "README"],
+        ):
+            decision = gate.authorize_auto_merge(passing_request(files=files, diff_text="+harmless proof\n", body=body))
+            self.assertTrue(decision["merge"], decision)
+            self.assertEqual(decision["reasons"], [])
+            self.assertFalse(decision["label_needs_human"])
+        moved = gate.paths_from_pull_files([{
+            "filename": "docs/prod.md",
+            "previous_filename": "core/prod.py",
+            "status": "renamed",
+        }])
+        renamed = gate.authorize_auto_merge(passing_request(files=moved, diff_text="+moved\n", body=body))
+        self.assertIn("core/prod.py", moved)
+        self.assertFalse(renamed["merge"])
+
+    def test_unverified_checks_or_review_do_not_merge(self):
+        wrong_head = gate.authorize_auto_merge(passing_request(head_sha="def"))
+        self.assertFalse(wrong_head["merge"])
+        self.assertIn("review_sha_unverified", wrong_head["reasons"])
+        self.assertIn("checks_sha_unverified", wrong_head["reasons"])
+        missing_checks = gate.authorize_auto_merge(passing_request(checks=[]))
+        self.assertFalse(missing_checks["merge"])
+        self.assertIn("checks_unverified", missing_checks["reasons"])
+        other_author = dict(passing_request()["review"])
+        other_author["author"] = "someone"
+        forged = gate.authorize_auto_merge(passing_request(review=other_author))
+        self.assertFalse(forged["merge"])
+        self.assertIn("review_author_unverified", forged["reasons"])
+
+    def test_merge_commands_stay_behind_the_live_guard(self):
+        merges = []
+        for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("merge --auto", text, path.name)
+            self.assertNotIn("enablePullRequestAutoMerge", text, path.name)
+            if "gh pr merge" not in text:
+                continue
+            merges.append(path.name)
+            self.assertEqual(text.count("gh pr merge"), 1, path.name)
+            before, _after = text.split("gh pr merge", 1)
+            self.assertIn("authorize-merge", before, path.name)
+            self.assertIn("--match-head-commit", text, path.name)
+            self.assertIn("set -euo pipefail", before, path.name)
+        self.assertEqual(merges, ["lequtis-engineering-gate.yml", "lequtis-pr-gate.yml"])
+        for path in (ROOT / "integrations").glob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("gh pr merge", text, path.name)
+            self.assertNotIn("enablePullRequestAutoMerge", text, path.name)
+
+    def test_only_the_actions_bot_can_set_the_review_verdict(self):
+        head = "a" * 40
+        payload = json.dumps({
+            "verdict": "pass",
+            "in_scope": True,
+            "head_sha": head,
+            "findings": [],
+        })
+        forged = {
+            "user": {"login": "someone"},
+            "body": "<!-- lequtis-independent-review v1 -->\n\n```json\n" + payload + "\n```\n",
+        }
+        official = {
+            "user": {"login": "github-actions[bot]"},
+            "body": "<!-- lequtis-independent-review v1 -->\n\n```json\n" + payload + "\n```\n",
+        }
+        self.assertIsNone(gate.select_review([forged], head))
+        chosen = gate.select_review([forged, official], head)
+        self.assertEqual(chosen["author"], "github-actions[bot]")
+        self.assertEqual(chosen["verdict"], "pass")
+        self.assertIsNone(gate.select_review([official], "b" * 40))
 
     def test_hermes_summary_degrades_and_hides_secret_values(self):
         secret = "tunnel-secret-value"

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """LeQutis engineering gate. External reviewers are subordinate.
 
-Genuinely necessary means a non-empty net diff, no duplicate of existing code
-or an open pull request, and a reviewer judgment that the diff is in scope for
-the stated acceptance criteria. That is necessary for auto-merge and not
-sufficient: the denylist, checks, and acceptance evidence can still hold it.
+Automation may merge only a documentation pull request, and only when the
+checks, the independent review, and the label set are all verified for that
+exact head SHA. A ``needs-human`` label, a mixed or non-doc diff, or any fact
+that cannot be verified is a hold. The gate can add ``needs-human``. It never
+removes that label, enables GitHub auto-merge, or pushes to the default branch.
 """
 from __future__ import annotations
 
@@ -24,8 +25,27 @@ from typing import Any, Callable
 SCHEMA = "lequtis.engineering_receipt.v1"
 RECEIPT_MARKER = "<!-- lequtis-engineering-receipt v1 -->"
 REVIEW_MARKER = "lequtis-independent-review v1"
+REVIEW_AUTHOR = "github-actions[bot]"
 LABEL = "needs-human"
 MAX_REPAIRS = 2
+# Jobs that are still running while this gate decides. Their own in-progress
+# check is not evidence that another check failed. A failure still holds.
+SELF_CHECK_NAMES = frozenset({"merge", "assess", "repair", "gate"})
+PASSING_CONCLUSIONS = frozenset({"success", "skipped", "neutral"})
+DOC_POLICY_PATHS = frozenset({
+    "docs/engineering/ENGINEERING_GATE.md",
+    "docs/engineering/PR_GATE.md",
+})
+FORBIDDEN_ROOTS = frozenset({"infra", ".github", "core", "integrations", "tests"})
+README_NAMES = frozenset({"README", "README.md", "README.markdown"})
+CONFIG_SUFFIXES = (".yml", ".yaml", ".json", ".toml", ".ini", ".cfg", ".conf", ".xml")
+EXECUTABLE_SUFFIXES = (
+    ".py", ".sh", ".bash", ".zsh", ".js", ".ts", ".mjs", ".cjs", ".rb",
+    ".go", ".rs", ".php", ".pl", ".exe",
+)
+PULL_FILE_STATUSES = frozenset({
+    "added", "removed", "modified", "renamed", "copied", "changed", "unchanged",
+})
 SECRET_NAMES = (
     "LEQUTIS_REVIEWER_API_KEY",
     "LEQUTIS_TUNNEL_ID",
@@ -110,6 +130,161 @@ def risk_report(files: list[str], diff_text: str = "") -> dict[str, Any]:
     return {"needs_human": bool(matches), "matches": matches}
 
 
+def normalize_repo_path(path: str) -> str | None:
+    """Return a repo-relative path, or None when the path is not a safe file."""
+    if not isinstance(path, str):
+        return None
+    text = path.replace("\\", "/").strip()
+    if not text or "\0" in text or text.startswith("/"):
+        return None
+    if text.startswith("./"):
+        text = text[2:]
+    parts = text.split("/")
+    if any(part in ("", ".", "..") for part in parts):
+        return None
+    return "/".join(parts)
+
+
+def is_documentation_path(path: str) -> bool:
+    """True only for markdown under docs/ or a README outside protected trees.
+
+    Gate policy documents, config, executables, workflows, GOLDEN_MASTER.json,
+    and anything under infra/, .github/, core/, integrations/, or tests/ are
+    not documentation. An unreadable path is not documentation.
+    """
+    normal = normalize_repo_path(path)
+    if normal is None:
+        return False
+    parts = normal.split("/")
+    if parts[0] in FORBIDDEN_ROOTS:
+        return False
+    if parts[-1] == "GOLDEN_MASTER.json":
+        return False
+    if normal in DOC_POLICY_PATHS:
+        return False
+    base = parts[-1]
+    lower = base.lower()
+    if lower.endswith(CONFIG_SUFFIXES) or lower.endswith(EXECUTABLE_SUFFIXES):
+        return False
+    if normal.startswith("docs/") and lower.endswith(".md"):
+        return True
+    if base in README_NAMES:
+        return True
+    return False
+
+
+def documentation_only(files: list[str]) -> bool:
+    return bool(files) and all(is_documentation_path(path) for path in files)
+
+
+def label_names(labels: Any) -> list[str] | None:
+    """Return label names, or None when the label payload is not verified."""
+    if not isinstance(labels, list):
+        return None
+    names: list[str] = []
+    for item in labels:
+        if isinstance(item, str) and item:
+            names.append(item)
+        elif isinstance(item, dict) and isinstance(item.get("name"), str) and item["name"]:
+            names.append(item["name"])
+        else:
+            return None
+    return names
+
+
+def label_hold_reasons(labels: Any, labels_verified: bool) -> list[str]:
+    if labels_verified is not True:
+        return ["labels_unverified"]
+    names = label_names(labels)
+    if names is None:
+        return ["labels_unverified"]
+    if LABEL in names:
+        return ["needs_human_label"]
+    return []
+
+
+def review_hold_reasons(review: Any, head_sha: str) -> list[str]:
+    """Hold unless github-actions[bot] recorded a clean pass for this SHA."""
+    if not isinstance(review, dict):
+        return ["review_unverified"]
+    reasons: list[str] = []
+    if not head_sha or review.get("head_sha") != head_sha:
+        reasons.append("review_sha_unverified")
+    if review.get("author") != REVIEW_AUTHOR:
+        reasons.append("review_author_unverified")
+    findings = review.get("findings") if isinstance(review.get("findings"), list) else None
+    if findings is None:
+        reasons.append("review_unverified")
+        findings = []
+    passed = review.get("verdict") == "pass" and review.get("in_scope") is True
+    if not passed:
+        reasons.append("independent_review_" + str(review.get("verdict") or "missing"))
+    elif any(not isinstance(item, dict) or item.get("severity") == "blocking" or item for item in findings):
+        reasons.append("review_not_clean")
+    return reasons
+
+
+def check_hold_reason(checks: Any, head_sha: str, files: list[str]) -> str | None:
+    """Hold unless every check on this head SHA passed, including verify."""
+    if not head_sha:
+        return "head_sha_unverified"
+    if not isinstance(checks, list) or not checks:
+        return "checks_unverified"
+    latest: dict[str, dict[str, Any]] = {}
+    for item in checks:
+        if not isinstance(item, dict) or not item.get("name"):
+            return "checks_unverified"
+        sha = item.get("head_sha") or item.get("sha")
+        if sha != head_sha:
+            return "checks_sha_unverified"
+        name = str(item["name"])
+        previous = latest.get(name)
+        if previous is None or str(item.get("started_at") or "") >= str(previous.get("started_at") or ""):
+            latest[name] = item
+    considered: list[dict[str, Any]] = []
+    for name, item in latest.items():
+        conclusion = item.get("conclusion") or ""
+        done = item.get("status") in (None, "", "completed") and bool(conclusion)
+        if not done:
+            if name in SELF_CHECK_NAMES:
+                continue
+            return "checks_incomplete"
+        if conclusion not in PASSING_CONCLUSIONS:
+            return "checks_failed"
+        considered.append(item)
+    summary = summarize_checks(considered, requires_sovereign_loop(files))
+    if not summary["passed"]:
+        return "checks_failed"
+    verify = next((item for item in considered if item.get("name") == "verify"), None)
+    if verify is None or verify.get("conclusion") != "success":
+        return "checks_failed"
+    return None
+
+
+def paths_from_pull_files(files: list[Any]) -> list[str] | None:
+    """Paths touched by a pull request, including a rename's old path.
+
+    None means the file list is not something this gate can verify.
+    """
+    paths: list[str] = []
+    for item in files:
+        if not isinstance(item, dict):
+            return None
+        status = str(item.get("status") or "")
+        if status not in PULL_FILE_STATUSES:
+            return None
+        name = item.get("filename")
+        if not isinstance(name, str) or not name:
+            return None
+        paths.append(name)
+        previous = item.get("previous_filename")
+        if status == "renamed" or previous not in (None, ""):
+            if not isinstance(previous, str) or not previous:
+                return None
+            paths.append(previous)
+    return paths
+
+
 def parse_task(body: str) -> dict[str, Any]:
     text = body or ""
     task_id = None
@@ -150,9 +325,7 @@ def verify_acceptance(
     tests_passed: bool,
     review_passed: bool,
 ) -> list[dict[str, Any]]:
-    docs_only = bool(files) and all(
-        path.startswith("docs/") and path.endswith(".md") for path in files
-    )
+    docs_only = documentation_only(files)
     results = []
     for item in criteria:
         criterion = item["text"]
@@ -266,12 +439,22 @@ def parse_review_body(body: str) -> dict[str, Any] | None:
     return parsed
 
 
-def select_review(bodies: list[str], head_sha: str) -> dict[str, Any] | None:
+def select_review(reviews: list[Any], head_sha: str) -> dict[str, Any] | None:
+    """Accept only the Actions review posted for this exact head SHA."""
+    if not head_sha:
+        return None
     chosen = None
-    for body in bodies:
-        parsed = parse_review_body(body)
+    for item in reviews:
+        if not isinstance(item, dict):
+            continue
+        login = ((item.get("user") or {}).get("login") or "")
+        if login != REVIEW_AUTHOR:
+            continue
+        parsed = parse_review_body(item.get("body") or "")
         if parsed and parsed.get("head_sha") == head_sha:
-            chosen = parsed
+            chosen = dict(parsed)
+            chosen["author"] = REVIEW_AUTHOR
+            chosen["head_sha"] = head_sha
     return chosen
 
 
@@ -395,8 +578,22 @@ def build_receipt(request: dict[str, Any]) -> dict[str, Any]:
         reasons.append("unverified_completion_claim")
     if request.get("draft"):
         reasons.append("draft")
-    if request.get("same_repo") is False:
+    if request.get("same_repo") is not True:
         reasons.append("fork")
+    if not documentation_only(files):
+        reasons.append("not_docs_only")
+    reasons.extend(label_hold_reasons(request.get("labels"), request.get("labels_verified") is True))
+    reasons.extend(review_hold_reasons(review, str(request.get("head_sha") or "")))
+    check_reason = check_hold_reason(list(request.get("checks") or []), str(request.get("head_sha") or ""), files)
+    if check_reason:
+        reasons.append(check_reason)
+    diff_text = request.get("diff_text")
+    if not isinstance(diff_text, str) or (files and not diff_text.strip()):
+        reasons.append("diff_unverified")
+    if request.get("live_unverified"):
+        reasons.append("live_unverified")
+    if request.get("head_sha_mismatch"):
+        reasons.append("head_sha_moved")
     ordered = list(dict.fromkeys(reasons))
     decision = "merge" if not ordered else "hold"
     repairs = list(request.get("repairs") or [])
@@ -462,6 +659,7 @@ def build_receipt(request: dict[str, Any]) -> dict[str, Any]:
         "repair_slot": repair_slot,
         "merge_decision": decision,
         "merge_reason": "allowed" if decision == "merge" else "; ".join(ordered),
+        "label_needs_human": (not documentation_only(files)) or bool(risk["needs_human"]),
         "merge_commit_sha": request.get("merge_commit_sha"),
         "read_back": read_back,
         "notify": request.get("notify") or {"telegram_delivered": False, "degraded": True, "reason": "not_run"},
@@ -593,11 +791,11 @@ def duplicate_blobs(cwd: str, files: list[str]) -> list[str]:
 
 
 def git_context(cwd: str, base: str, head: str, other_diffs: list[tuple[str, str]], scan_complete: bool) -> dict[str, Any]:
-    names = _git(cwd, "diff", "--name-only", f"{base}...{head}")
+    names = _git(cwd, "diff", "--name-only", "--no-renames", f"{base}...{head}")
     if names.returncode != 0:
         raise RuntimeError(names.stderr.strip() or "git diff failed")
     files = [line for line in names.stdout.splitlines() if line.strip()]
-    diff_proc = _git(cwd, "diff", f"{base}...{head}")
+    diff_proc = _git(cwd, "diff", "--no-renames", f"{base}...{head}")
     if diff_proc.returncode != 0:
         raise RuntimeError(diff_proc.stderr.strip() or "git diff failed")
     diff = diff_proc.stdout
@@ -641,9 +839,11 @@ def _gh_json(args: list[str]) -> Any:
 def load_open_diffs(repo: str, pr: str) -> tuple[list[tuple[str, str]], bool]:
     try:
         items = _gh_json([
-            "pr", "list", "--repo", repo, "--state", "open", "--limit", "20", "--json", "number,url",
+            "pr", "list", "--repo", repo, "--state", "open", "--limit", "100", "--json", "number,url",
         ])
     except (RuntimeError, json.JSONDecodeError):
+        return [], False
+    if not isinstance(items, list) or len(items) >= 100:
         return [], False
     diffs: list[tuple[str, str]] = []
     for item in items:
@@ -685,9 +885,20 @@ def poll_checks(
     return {"complete": False, "checks": last, "summary": summarize_checks(last, require_loop)}
 
 
-def fetch_review_bodies(repo: str, pr: str) -> list[str]:
-    reviews = _gh_json(["api", f"repos/{repo}/pulls/{pr}/reviews?per_page=100"])
-    return [item.get("body") or "" for item in reviews]
+def fetch_review_bodies(repo: str, pr: str) -> list[dict[str, Any]] | None:
+    """Reviews for this pull request. None means the list could not be verified."""
+    collected: list[dict[str, Any]] = []
+    for page in range(1, 6):
+        try:
+            batch = _gh_json(["api", f"repos/{repo}/pulls/{pr}/reviews?per_page=100&page={page}"])
+        except (RuntimeError, json.JSONDecodeError):
+            return None
+        if not isinstance(batch, list):
+            return None
+        collected.extend(item for item in batch if isinstance(item, dict))
+        if len(batch) < 100:
+            return collected
+    return None
 
 
 def _token() -> str:
@@ -715,6 +926,14 @@ def _github(method: str, url: str, payload: dict[str, Any] | None = None) -> tup
 
 
 def sync_label(repo: str, pr: str, needed: bool) -> dict[str, Any]:
+    """Add ``needs-human`` when asked. Never remove it.
+
+    A human applies that label to stop automation. Clearing it would let a
+    later job merge a pull request the human had already held, which is what
+    happened to pull request 44.
+    """
+    if not needed:
+        return {"ok": True, "action": "not_removed", "needed": False}
     if not _token():
         return {"ok": False, "error": "missing_token", "needed": needed}
     base = "https://api.github.com/repos/" + repo
@@ -725,11 +944,8 @@ def sync_label(repo: str, pr: str, needed: bool) -> dict[str, Any]:
     })
     if status not in (201, 422):
         return {"ok": False, "error": "label_create_" + str(status), "needed": needed}
-    if needed:
-        status, _body = _github("POST", base + "/issues/" + str(pr) + "/labels", {"labels": [LABEL]})
-        return {"ok": status in (200, 201), "action": "added", "status": status}
-    status, _body = _github("DELETE", base + "/issues/" + str(pr) + "/labels/" + LABEL)
-    return {"ok": status in (200, 204, 404), "action": "removed", "status": status}
+    status, _body = _github("POST", base + "/issues/" + str(pr) + "/labels", {"labels": [LABEL]})
+    return {"ok": status in (200, 201), "action": "added", "status": status}
 
 
 def upsert_comment(repo: str, pr: str, body: str) -> dict[str, Any]:
@@ -781,11 +997,26 @@ def evaluate(request: dict[str, Any]) -> dict[str, Any]:
     return scrub_obj(draft)
 
 
+def _label_evidence(folder: Path) -> tuple[list[Any], bool]:
+    labels_path = folder / "labels.json"
+    status_path = folder / "labels-status.json"
+    if not labels_path.is_file() or not status_path.is_file():
+        return [], False
+    try:
+        labels = json.loads(labels_path.read_text(encoding="utf-8"))
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return [], False
+    verified = status.get("verified") is True and isinstance(labels, list)
+    return (labels if verified else []), verified
+
+
 def assemble_request(evidence: str) -> dict[str, Any]:
     folder = Path(evidence)
     ctx = json.loads((folder / "context.json").read_text(encoding="utf-8"))
     checks = json.loads((folder / "checks.json").read_text(encoding="utf-8"))
     review = json.loads((folder / "review.json").read_text(encoding="utf-8"))
+    labels, verified = _label_evidence(folder)
     return {
         "files": ctx["files"],
         "diff_text": ctx["diff_text"],
@@ -801,6 +1032,8 @@ def assemble_request(evidence: str) -> dict[str, Any]:
         "draft": os.environ.get("DRAFT") == "true",
         "same_repo": os.environ.get("SAME_REPO") == "true",
         "gate_run_url": os.environ.get("RUN_URL") or "",
+        "labels": labels,
+        "labels_verified": verified,
     }
 
 
@@ -812,7 +1045,7 @@ def write_gate_outputs(receipt_path: str, output_path: str) -> None:
 
 
 def prepare_repair_request(cwd: str, base: str) -> dict[str, Any]:
-    names = _git(cwd, "diff", "--name-only", f"{base}...HEAD")
+    names = _git(cwd, "diff", "--name-only", "--no-renames", f"{base}...HEAD")
     if names.returncode != 0:
         raise RuntimeError(names.stderr.strip() or "git diff failed")
     changed: dict[str, str] = {}
@@ -840,6 +1073,135 @@ def apply_repair_plan(plan_path: str, message_path: str) -> int:
         sys.stdout.write(path + "\n")
     Path(message_path).write_text(plan["commit_message"], encoding="utf-8")
     return 0
+
+
+def authorize_auto_merge(request: dict[str, Any]) -> dict[str, Any]:
+    """Whether automation may merge this request. Unverified facts refuse."""
+    receipt = build_receipt(request)
+    allowed = receipt["merge_decision"] == "merge"
+    reason = str(receipt.get("merge_reason") or "")
+    reasons = [] if allowed else [part for part in reason.split("; ") if part]
+    return {
+        "merge": allowed,
+        "reasons": reasons,
+        "label_needs_human": bool(receipt.get("label_needs_human")),
+        "merge_decision": receipt["merge_decision"],
+        "merge_reason": reason,
+    }
+
+
+def _pull_pages(path: str, page_limit: int = 10) -> list[Any] | None:
+    collected: list[Any] = []
+    separator = "&" if "?" in path else "?"
+    for page in range(1, page_limit + 1):
+        try:
+            batch = _gh_json(["api", f"{path}{separator}per_page=100&page={page}"])
+        except (RuntimeError, json.JSONDecodeError):
+            return None
+        if not isinstance(batch, list):
+            return None
+        collected.extend(batch)
+        if len(batch) < 100:
+            return collected
+    return None
+
+
+def _unverified_request(head_sha: str, **extra: Any) -> dict[str, Any]:
+    request: dict[str, Any] = {
+        "files": [],
+        "diff_text": "",
+        "body": "",
+        "checks": [],
+        "review": {"verdict": "missing", "in_scope": False, "findings": []},
+        "duplicate": False,
+        "duplicate_scan": "incomplete",
+        "labels": [],
+        "labels_verified": False,
+        "head_sha": head_sha,
+        "draft": True,
+        "same_repo": False,
+        "live_unverified": True,
+    }
+    request.update(extra)
+    return request
+
+
+def collect_merge_request(repo: str, pr: str, head_sha: str, base: str, cwd: str) -> dict[str, Any]:
+    """Read the live pull request. Any failed read stays unverified and cannot merge."""
+    if not head_sha:
+        return _unverified_request("")
+    try:
+        pull = _gh_json(["api", f"repos/{repo}/pulls/{pr}"])
+    except (RuntimeError, json.JSONDecodeError):
+        return _unverified_request(head_sha)
+    if not isinstance(pull, dict) or (pull.get("head") or {}).get("sha") != head_sha:
+        return _unverified_request(head_sha, head_sha_mismatch=True)
+    labels: list[str] = []
+    for item in pull.get("labels") or []:
+        if not isinstance(item, dict) or not isinstance(item.get("name"), str) or not item["name"]:
+            return _unverified_request(head_sha)
+        labels.append(item["name"])
+    head_repo = ((pull.get("head") or {}).get("repo") or {}).get("full_name")
+    observed = _git(cwd, "rev-parse", "HEAD")
+    if observed.returncode != 0 or observed.stdout.strip() != head_sha:
+        return _unverified_request(head_sha, head_sha_mismatch=True)
+    file_payload = _pull_pages(f"repos/{repo}/pulls/{pr}/files")
+    if file_payload is None:
+        return _unverified_request(head_sha)
+    pulled_paths = paths_from_pull_files(file_payload)
+    if pulled_paths is None:
+        return _unverified_request(head_sha)
+    try:
+        others, complete = load_open_diffs(repo, pr)
+        ctx = git_context(cwd, base, "HEAD", others, complete)
+    except (RuntimeError, OSError):
+        return _unverified_request(head_sha)
+    if set(ctx.get("files") or []) != set(pulled_paths):
+        return _unverified_request(head_sha)
+    try:
+        runs = fetch_check_runs(repo, head_sha)
+        status = _gh_json(["api", f"repos/{repo}/commits/{head_sha}/status"])
+    except (RuntimeError, json.JSONDecodeError):
+        return _unverified_request(head_sha)
+    if not isinstance(runs, list) or not isinstance(status, dict):
+        return _unverified_request(head_sha)
+    if status.get("sha") not in (None, head_sha):
+        return _unverified_request(head_sha)
+    if int(status.get("total_count") or 0) > 0 and status.get("state") != "success":
+        runs = list(runs) + [{
+            "name": "commit-status",
+            "status": "completed",
+            "conclusion": "failure",
+            "head_sha": head_sha,
+        }]
+    reviews = fetch_review_bodies(repo, pr)
+    if reviews is None:
+        return _unverified_request(head_sha)
+    selected = select_review(reviews, head_sha) or {
+        "verdict": "missing",
+        "in_scope": False,
+        "findings": [],
+        "head_sha": head_sha,
+        "author": REVIEW_AUTHOR,
+    }
+    body = pull.get("body") or ""
+    return {
+        "files": list(ctx["files"]),
+        "diff_text": ctx["diff_text"],
+        "body": body if isinstance(body, str) else "",
+        "checks": runs,
+        "review": selected,
+        "duplicate": bool(ctx["duplicate"]),
+        "duplicate_of": ctx.get("duplicate_of"),
+        "duplicate_scan": ctx["duplicate_scan"],
+        "repairs": ctx.get("repairs") or [],
+        "labels": labels,
+        "labels_verified": True,
+        "head_sha": head_sha,
+        "draft": bool(pull.get("draft")),
+        "same_repo": head_repo == repo,
+        "pr_url": pull.get("html_url") or "",
+    }
 
 
 def extract_criteria(body: str) -> str:
@@ -922,6 +1284,13 @@ def main(argv: list[str] | None = None) -> int:
     outputs = sub.add_parser("outputs")
     outputs.add_argument("--receipt", required=True)
 
+    authorize = sub.add_parser("authorize-merge")
+    authorize.add_argument("--repo", required=True)
+    authorize.add_argument("--pr", required=True)
+    authorize.add_argument("--head-sha", required=True)
+    authorize.add_argument("--base", required=True)
+    authorize.add_argument("--cwd", default=".")
+
     prepare = sub.add_parser("prepare-repair")
     prepare.add_argument("--base", required=True)
     prepare.add_argument("--cwd", default=".")
@@ -964,10 +1333,9 @@ def main(argv: list[str] | None = None) -> int:
         selected = None
         error = ""
         for _ in range(3):
-            try:
-                bodies = fetch_review_bodies(args.repo, args.pr)
-            except RuntimeError as exc:
-                error = str(exc)[:300]
+            bodies = fetch_review_bodies(args.repo, args.pr)
+            if bodies is None:
+                error = "review list unverified"
                 bodies = []
             selected = select_review(bodies, args.sha)
             if selected:
@@ -1035,6 +1403,11 @@ def main(argv: list[str] | None = None) -> int:
         receipt = json.loads(Path(args.receipt).read_text(encoding="utf-8"))
         sys.stdout.write(receipt["merge_decision"] + "\n" + receipt["merge_reason"] + "\n")
         return 0
+    if args.cmd == "authorize-merge":
+        facts = collect_merge_request(args.repo, str(args.pr), args.head_sha, args.base, args.cwd)
+        decision = authorize_auto_merge(facts)
+        sys.stdout.write(json.dumps(decision, indent=2, sort_keys=True) + "\n")
+        return 0 if decision["merge"] else 2
     if args.cmd == "prepare-repair":
         _write(args.out, prepare_repair_request(args.cwd, args.base))
         return 0

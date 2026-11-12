@@ -66,6 +66,12 @@ jobs:
             --pr "$PR" \
             --sha "$HEAD_SHA" \
             --out evidence/review.json
+          if gh api "repos/${REPO}/issues/${PR}" --jq '[.labels[].name]' > evidence/labels.json; then
+            printf '%s\n' '{"verified": true}' > evidence/labels-status.json
+          else
+            printf '%s\n' '[]' > evidence/labels.json
+            printf '%s\n' '{"verified": false}' > evidence/labels-status.json
+          fi
           python3 integrations/engineering_gate.py assemble \
             --evidence evidence \
             --out evidence/request.json
@@ -92,8 +98,14 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
         run: |
-          needed=$(python3 -c 'import json; print("true" if json.load(open("evidence/engineering-receipt.json"))["risk"]["needs_human"] else "false")')
-          python3 integrations/engineering_gate.py label --repo "$REPO" --pr "$PR" --needed "$needed"
+          if [ ! -f evidence/engineering-receipt.json ]; then
+            python3 integrations/engineering_gate.py label --repo "$REPO" --pr "$PR" --needed true
+            exit 0
+          fi
+          needed=$(python3 -c 'import json; print("true" if json.load(open("evidence/engineering-receipt.json")).get("label_needs_human") else "false")')
+          if [ "$needed" = "true" ]; then
+            python3 integrations/engineering_gate.py label --repo "$REPO" --pr "$PR" --needed true
+          fi
       - name: Upload the receipt
         if: always()
         uses: actions/upload-artifact@v4
@@ -148,6 +160,12 @@ jobs:
           git config user.name "github-actions[bot]"
           git add --pathspec-from-file evidence/repair-paths.txt
           git commit -F evidence/repair-message.txt
+          case "${HEAD_REF}" in
+            main|master)
+              echo "refusing to push the default branch"
+              exit 1
+              ;;
+          esac
           git push origin "HEAD:${HEAD_REF}"
           git rev-parse HEAD
 
@@ -162,8 +180,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -178,6 +197,7 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
           receipt=$(find evidence -name engineering-receipt.json | head -n 1)
@@ -185,12 +205,21 @@ jobs:
             echo "receipt artifact missing"
             exit 1
           fi
-          cp "$receipt" evidence/engineering-receipt.json
+          mkdir -p evidence
+          if [ ! -e evidence/engineering-receipt.json ] || [ "$(realpath "$receipt")" != "$(realpath evidence/engineering-receipt.json)" ]; then
+            cp "$receipt" evidence/engineering-receipt.json
+          fi
           decision=$(python3 -c 'import json; print(json.load(open("evidence/engineering-receipt.json"))["merge_decision"])')
           if [ "$decision" != "merge" ]; then
             echo "receipt does not allow merge"
             exit 1
           fi
+          git fetch origin "$BASE_REF"
+          python3 integrations/engineering_gate.py authorize-merge \
+            --repo "$REPO" \
+            --pr "$PR" \
+            --head-sha "$HEAD_SHA" \
+            --base "origin/${BASE_REF}"
           set +e
           gh pr merge "$PR" --repo "$REPO" --squash --match-head-commit "$HEAD_SHA" >/tmp/merge.out 2>/tmp/merge.err
           code=$?

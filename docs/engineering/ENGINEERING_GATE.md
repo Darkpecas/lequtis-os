@@ -4,6 +4,22 @@ LeQutis decides. The independent reviewer, GitHub Actions, Hermes, and Telegram 
 
 LOCAL PROOF, NOT LIVE VPS VERIFIED. A green run does not prove live Hostinger or a live Hermes route.
 
+## Who merges
+
+Alan Gibson merges every pull request that is not a verified documentation change. Automation may squash-merge a pull request only when all of the following are verified for the same head SHA:
+
+1. Every changed file is documentation: a `*.md` file under `docs/`, or a file named `README`, `README.md`, or `README.markdown`. A rename keeps the old path in that set.
+2. The diff contains nothing executable, no workflow, no config, no `GOLDEN_MASTER.json`, and nothing under `infra/`, `.github/`, `core/`, `integrations/`, or `tests/`. The gate policy files `docs/engineering/ENGINEERING_GATE.md` and `docs/engineering/PR_GATE.md` are not documentation for this purpose.
+3. Every check on that head SHA completed with a passing conclusion, and the `verify` test check succeeded.
+4. `github-actions[bot]` posted the independent review for that head SHA. The verdict is `pass`, the diff is in scope, and there are no findings.
+5. The label list was fetched and it does not contain `needs-human`.
+
+If any item cannot be verified, automation does not merge. Both merge jobs call `integrations/engineering_gate.py authorize-merge` and stop when that command exits non-zero. The merge command is `gh pr merge --squash --match-head-commit` for that head SHA. The workflows do not pass `--auto` and do not enable GitHub auto-merge. They do not push to `main`.
+
+Anything else, including a change to the gate, a workflow, code, or infrastructure, is labelled `needs-human` and left for Alan. The gate may add that label. It never removes it. Pull request 44 carried `needs-human` and was still merged by automation; a later run must not do that.
+
+The repair job may push one trailing-newline fix to the pull request branch. It refuses a push whose target is `main` or `master`.
+
 ## Genuinely necessary
 
 Genuinely necessary means a non-empty net diff, no duplicate of existing code or an open pull request, and a reviewer judgment that the diff is in scope for the stated acceptance criteria.
@@ -12,11 +28,11 @@ Genuinely necessary means a non-empty net diff, no duplicate of existing code or
 2. It has no duplicate of existing code or of an open pull request.
 3. The independent reviewer judges the diff in scope for the stated acceptance criteria.
 
-Genuinely necessary is required before auto-merge. It is not enough on its own. Auto-merge also needs the disposable test check, the independent review check, evidence for every acceptance criterion, no blocking findings, and a clear denylist. Repository rules that GitHub itself enforces still apply.
+Genuinely necessary is required before an automated documentation merge. It is not enough on its own. The documentation rule, the checks and tests on that head SHA, a clean independent review for that SHA, a verified label list with no `needs-human` label, evidence for every acceptance criterion, and a clear denylist all have to hold. If one of them cannot be verified, automation does not merge. Repository rules that GitHub itself enforces still apply.
 
 ## Denylist
 
-A match forces the `needs-human` label and blocks auto-merge.
+A match forces the `needs-human` label and blocks an automated merge. The gate does not clear that label afterward.
 
 Path classes: secret material (`.env`, secret, credential, password, `.pem`, `.key`, `id_rsa`), database migrations and `database/schema.sql`, destructive script names, and `infra/`, `terraform/`, `deploy/`, plus Terraform filenames.
 

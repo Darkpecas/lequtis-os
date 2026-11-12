@@ -22,6 +22,8 @@ class PrGateTests(unittest.TestCase):
             codex_status="missing",
             duplicate=False,
             required_checks_passed=True,
+            labels=[],
+            labels_verified=True,
         )
         self.assertTrue(allowed["merge_allowed"])
         self.assertEqual(allowed["blocking"], [])
@@ -34,6 +36,8 @@ class PrGateTests(unittest.TestCase):
             tests_passed=True,
             codex_status="pass",
             duplicate=False,
+            labels=[],
+            labels_verified=True,
         )
         self.assertTrue(allowed["merge_allowed"])
         self.assertEqual(allowed["review_source"], "codex+auditor")
@@ -124,6 +128,57 @@ class PrGateTests(unittest.TestCase):
                 duplicate=False,
             )["merge_allowed"]
         )
+
+    def test_needs_human_mixed_and_gate_diffs_are_not_merged(self):
+        labelled = decide(
+            files=["docs/note.md"],
+            tests_passed=True,
+            codex_status="missing",
+            duplicate=False,
+            labels=["needs-human"],
+            labels_verified=True,
+        )
+        self.assertFalse(labelled["merge_allowed"])
+        self.assertIn("needs_human_label", labelled["blocking"])
+        mixed = decide(
+            files=["docs/note.md", "core/lequtis.py"],
+            tests_passed=True,
+            codex_status="missing",
+            duplicate=False,
+            labels=[],
+            labels_verified=True,
+        )
+        self.assertFalse(mixed["merge_allowed"])
+        self.assertIn("not_docs_only", mixed["blocking"])
+        self.assertTrue(mixed["label_needs_human"])
+        workflow = decide(
+            files=[".github/workflows/lequtis-pr-gate.yml"],
+            tests_passed=True,
+            codex_status="missing",
+            duplicate=False,
+            labels=[],
+            labels_verified=True,
+        )
+        self.assertFalse(workflow["merge_allowed"])
+        self.assertTrue(workflow["label_needs_human"])
+        clean = decide(
+            files=["docs/note.md", "README.md"],
+            tests_passed=True,
+            codex_status="missing",
+            duplicate=False,
+            labels=[],
+            labels_verified=True,
+        )
+        self.assertTrue(clean["merge_allowed"])
+        self.assertEqual(clean["blocking"], [])
+        unverified = decide(
+            files=["docs/note.md"],
+            tests_passed=True,
+            codex_status="missing",
+            duplicate=False,
+        )
+        self.assertFalse(unverified["merge_allowed"])
+        self.assertIn("labels_unverified", unverified["blocking"])
 
     def test_kernel_code_is_not_auto_merged(self):
         verdict = decide(

@@ -4,10 +4,12 @@
 It does not call a model, Hostinger, Hermes, or Telegram. A passing result is
 a local policy decision. It is not live-infrastructure proof.
 
-Auto-merge is allowed only for a non-empty, non-duplicate docs-only change
-when tests passed, required CI checks passed, and the independent review
-status is "pass". Credentials, schema migrations, workflows, Hermes/Hostinger
-paths, and destructive *added* diff lines are refused.
+Auto-merge is allowed only for a non-empty, non-duplicate documentation
+change when tests passed, required CI checks passed, the independent review
+status is "pass", the label list was verified, and ``needs-human`` is absent.
+Documentation means markdown under ``docs/`` or a README. Credentials, schema
+migrations, workflows, gate files, code, config, Hermes/Hostinger paths, and
+destructive *added* diff lines are refused. Missing facts are refused.
 """
 from __future__ import annotations
 
@@ -22,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from integrations.engineering_gate import documentation_only  # noqa: E402
 from integrations.pr_auditor import (  # noqa: E402
     audit,
     resolve_independent_review,
@@ -29,7 +32,6 @@ from integrations.pr_auditor import (  # noqa: E402
 from integrations.pr_workflow_receipt import build_receipt  # noqa: E402
 
 EVIDENCE_LABEL = "LOCAL PROOF, NOT LIVE VPS VERIFIED"
-HARMLESS_PREFIX = "docs/"
 
 
 def decide(
@@ -44,6 +46,8 @@ def decide(
     codex_status: str = "missing",
     required_checks_passed: bool = True,
     auditor: dict[str, Any] | None = None,
+    labels: list[str] | None = None,
+    labels_verified: bool = False,
 ) -> dict[str, Any]:
     """Return the merge decision.
 
@@ -84,9 +88,9 @@ def decide(
         for f in auditor_verdict.get("findings") or []
         if f.get("code") == "destructive_operation"
     ]
+    docs = documentation_only(files)
     harmless = (
-        bool(files)
-        and all(path.startswith(HARMLESS_PREFIX) and path.endswith(".md") for path in files)
+        docs
         and "credentials" not in finding_codes
         and "schema_migration" not in finding_codes
         and "workflow_infrastructure" not in finding_codes
@@ -112,8 +116,14 @@ def decide(
         blocking.append("unverified_completion_claim")
     if "acceptance_without_evidence" in finding_codes:
         blocking.append("acceptance_without_evidence")
+    if not docs:
+        blocking.append("not_docs_only")
     if not harmless:
         blocking.append("not_harmless")
+    if not labels_verified:
+        blocking.append("labels_unverified")
+    elif any(name == "needs-human" for name in (labels or [])):
+        blocking.append("needs_human_label")
 
     # Deduplicate while preserving order
     seen: set[str] = set()
@@ -145,6 +155,7 @@ def decide(
         "unverified_claim": unverified_claim,
         "blocking": ordered,
         "merge_allowed": not ordered,
+        "label_needs_human": (not docs) or bool(blocked) or bool(destructive),
         "repair": {
             "attempted": test_attempts > 1,
             "kind": "rerun_tests" if test_attempts > 1 else "none",
@@ -155,7 +166,7 @@ def decide(
 
 def git_files(base: str, head: str, cwd: str | None = None) -> list[str]:
     proc = subprocess.run(
-        ["git", "diff", "--name-only", f"{base}...{head}"],
+        ["git", "diff", "--name-only", "--no-renames", f"{base}...{head}"],
         cwd=cwd,
         check=False,
         text=True,
@@ -168,7 +179,7 @@ def git_files(base: str, head: str, cwd: str | None = None) -> list[str]:
 
 def git_diff(base: str, head: str, cwd: str | None = None) -> str:
     proc = subprocess.run(
-        ["git", "diff", f"{base}...{head}"],
+        ["git", "diff", "--no-renames", f"{base}...{head}"],
         cwd=cwd,
         check=False,
         text=True,
@@ -248,6 +259,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pr-number", default="0")
     parser.add_argument("--head-sha", help="PR head commit SHA for receipt identity")
     parser.add_argument("--run-url", default="")
+    parser.add_argument("--labels-verified", choices=("true", "false"), default="false")
+    parser.add_argument("--label", action="append", default=[])
     parser.add_argument("--out")
     parser.add_argument("--receipt-out")
     parser.add_argument("--auditor-out")
@@ -275,6 +288,8 @@ def main(argv: list[str] | None = None) -> int:
         "codex_status": args.codex_status,
         "required_checks_passed": args.required_checks_passed == "true",
         "auditor": auditor_verdict,
+        "labels": list(args.label or []),
+        "labels_verified": args.labels_verified == "true",
     }
     if args.ai_review is not None:
         decide_kwargs["ai_review"] = args.ai_review

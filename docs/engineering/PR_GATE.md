@@ -9,7 +9,7 @@ plane when authorized; this workflow only emits assimilable receipts.
 
 ## Flow
 
-Auto-merge in this workflow also requires the free Gemini review (`gemini-3.8-flash`) for the same head SHA. A missing `LEQUTIS_REVIEWER_API_KEY` fails that review closed, so this workflow does not merge. `.github/workflows/lequtis-engineering-gate.yml` applies the denylist, including `infra/terraform/`, and posts the engineering receipt.
+An automated merge in this workflow is allowed only for documentation, and only after `integrations/engineering_gate.py authorize-merge` verifies the same head SHA. Documentation means `*.md` under `docs/` or a README. It does not include executables, workflows, config, `GOLDEN_MASTER.json`, or anything under `infra/`, `.github/`, `core/`, `integrations/`, or `tests/`. The command also requires passing checks, a clean `github-actions[bot]` review for that SHA, and a fetched label list that does not contain `needs-human`. If any of those cannot be verified, the workflow does not merge. A missing `LEQUTIS_REVIEWER_API_KEY` fails the free Gemini review (`gemini-3.8-flash`) closed, so this workflow does not merge. `.github/workflows/lequtis-engineering-gate.yml` applies the same rule and the denylist, including `infra/terraform/`, and posts the engineering receipt. The workflow does not pass `--auto` and does not remove `needs-human`.
 
 `.github/workflows/lequtis-pr-gate.yml` runs on pull requests:
 
@@ -22,9 +22,10 @@ Auto-merge in this workflow also requires the free Gemini review (`gemini-3.8-fl
    - `evidence/pr-gate-receipt.json`
    - `evidence/pr-auditor-receipt.json`
    - `evidence/engineering-workflow-receipt.json` (task_id + correlation_id)
-6. Auto-merge is allowed only when the diff is non-empty, not already on the
-   base, docs-only Markdown under `docs/`, tests passed, required checks passed,
-   and independent review is `pass` (Codex when present, otherwise auditor).
+6. Automation may merge only when `authorize-merge` verifies a documentation
+   diff, passing checks on that head SHA, a clean independent review for that
+   SHA, and no `needs-human` label. The squash merge uses `--match-head-commit`.
+   Every other diff is labelled `needs-human` and is not merged by this workflow.
 
 ## Hard blocks (never auto-merged)
 

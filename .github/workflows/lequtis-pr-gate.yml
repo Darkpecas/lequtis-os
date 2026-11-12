@@ -165,13 +165,25 @@ jobs:
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
           PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set +e
           git fetch origin "${{ github.base_ref }}"
           printf '%s' "$PR_BODY" > /tmp/pr-body.md
           mkdir -p evidence
+          labels_verified=false
+          label_args=()
+          if gh api "repos/${REPO}/issues/${PR}" --jq '.labels[].name' > /tmp/pr-labels.txt; then
+            labels_verified=true
+            while IFS= read -r name; do
+              if [ -n "$name" ]; then
+                label_args+=(--label "$name")
+              fi
+            done < /tmp/pr-labels.txt
+          fi
           python3 integrations/pr_gate.py \
             --base "origin/${{ github.base_ref }}" \
             --head HEAD \
@@ -183,6 +195,8 @@ jobs:
             --required-checks-passed "${{ steps.checks.outputs.passed }}" \
             --pr-number "$PR" \
             --run-url "$RUN_URL" \
+            --labels-verified "$labels_verified" \
+            "${label_args[@]}" \
             --out evidence/pr-gate-receipt.json \
             --auditor-out evidence/pr-auditor-receipt.json \
             --receipt-out evidence/engineering-workflow-receipt.json
@@ -247,6 +261,24 @@ jobs:
           done
           gh pr comment "$PR" --repo "$REPO" --body-file /tmp/pr-gate-comment.md
 
+      - name: Apply needs-human when automation must not merge
+        if: always()
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ ! -f evidence/pr-gate-receipt.json ]; then
+            python3 integrations/engineering_gate.py label --repo "$REPO" --pr "$PR" --needed true
+            exit 0
+          fi
+          needed=$(python3 -c 'import json; print("true" if json.load(open("evidence/pr-gate-receipt.json", encoding="utf-8")).get("label_needs_human") else "false")')
+          if [ "$needed" = "true" ]; then
+            python3 integrations/engineering_gate.py label --repo "$REPO" --pr "$PR" --needed true
+          fi
+
       - name: Require the free Gemini review before merge
         id: gemini
         if: steps.decide.outputs.merge == 'true'
@@ -287,9 +319,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
-          gh pr merge "$PR" --repo "$REPO" --squash
+          git fetch origin "$BASE_REF"
+          python3 integrations/engineering_gate.py authorize-merge \
+            --repo "$REPO" \
+            --pr "$PR" \
+            --head-sha "$HEAD_SHA" \
+            --base "origin/${BASE_REF}"
+          gh pr merge "$PR" --repo "$REPO" --squash --match-head-commit "$HEAD_SHA"
           sha=$(gh api "repos/${REPO}/pulls/${PR}" --jq '.merge_commit_sha // empty')
           echo "merge_sha=$sha"
           if [ -n "$sha" ] && [ -f evidence/engineering-workflow-receipt.json ]; then
