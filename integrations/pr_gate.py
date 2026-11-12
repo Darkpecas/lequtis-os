@@ -38,6 +38,58 @@ DESTRUCTIVE_MARKERS = (
 HARMLESS_PREFIX = "docs/"
 
 
+def paths_from_name_status(lines: list[str]) -> list[str]:
+    """Include both sides of a rename. `--name-only` hides the deleted path."""
+    found: list[str] = []
+    for line in lines:
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        found.extend(part for part in parts[1:] if part)
+    return found
+
+
+def destructive_markers(diff_text: str) -> list[str]:
+    """Flag added operations, not the quoted denylist inside this module."""
+    found: list[str] = []
+    quoted = re.compile(r"""^\s*['"][^'"]+['"]\s*,?\s*$""")
+    for line in diff_text.splitlines():
+        if not line.startswith("+") or line.startswith("+++"):
+            continue
+        content = line[1:]
+        if quoted.match(content):
+            continue
+        for marker in DESTRUCTIVE_MARKERS:
+            if marker in content and marker not in found:
+                found.append(marker)
+    return found
+
+
+def review_status(reviews: list[dict[str, Any]], comments: list[dict[str, Any]], head_sha: str) -> str:
+    """Codex counts only when its review or finding is for this head SHA."""
+    reviewer = "chatgpt-codex-connector[bot]"
+
+    def login(item: dict[str, Any]) -> str:
+        user = item.get("user") or {}
+        return str(user.get("login") or "")
+
+    findings = [
+        item for item in comments
+        if login(item) == reviewer
+        and item.get("commit_id") == head_sha
+        and "codex-code-review-finding" in str(item.get("body") or "")
+    ]
+    if findings:
+        return "findings"
+    matched = [
+        item for item in reviews
+        if login(item) == reviewer and item.get("commit_id") == head_sha
+    ]
+    if matched:
+        return "pass"
+    return "missing"
+
+
 def _blocked(path: str) -> list[str]:
     low = path.lower()
     reasons = []
@@ -64,7 +116,7 @@ def decide(
         reasons = _blocked(path)
         if reasons:
             blocked[path] = reasons
-    destructive = [marker for marker in DESTRUCTIVE_MARKERS if marker in diff_text]
+    destructive = destructive_markers(diff_text)
     harmless = bool(files) and all(
         path.startswith(HARMLESS_PREFIX) and path.endswith(".md") for path in files
     ) and not blocked and not destructive
@@ -116,12 +168,12 @@ def decide(
 
 def git_files(base: str, head: str, cwd: str | None = None) -> list[str]:
     proc = subprocess.run(
-        ["git", "diff", "--name-only", f"{base}...{head}"],
+        ["git", "diff", "--name-status", "--find-renames", f"{base}...{head}"],
         cwd=cwd, check=False, text=True, capture_output=True,
     )
     if proc.returncode != 0:
         raise RuntimeError(proc.stderr.strip() or "git diff failed")
-    return [line for line in proc.stdout.splitlines() if line.strip()]
+    return paths_from_name_status(proc.stdout.splitlines())
 
 
 def git_diff(base: str, head: str) -> str:
@@ -134,34 +186,51 @@ def git_diff(base: str, head: str) -> str:
     return proc.stdout
 
 
+def _patch_id(diff: str) -> str:
+    if not diff.strip():
+        return ""
+    ident = subprocess.run(
+        ["git", "patch-id", "--stable"],
+        input=diff, text=True, capture_output=True, check=False,
+    )
+    if ident.returncode != 0 or not ident.stdout.strip():
+        return ""
+    return ident.stdout.split()[0]
+
+
 def git_duplicate(base: str, head: str) -> bool:
-    """True when this diff's stable patch-id already exists on base."""
+    """True when this diff's patch-id equals one commit already on base.
+
+    A diff without a commit header makes patch-id print an all-zero commit.
+    That value is never treated as a match.
+    """
     current = subprocess.run(
         ["git", "diff", f"{base}...{head}"],
         check=False, text=True, capture_output=True,
     )
-    if current.returncode != 0 or not current.stdout.strip():
+    if current.returncode != 0:
         return False
-    ident = subprocess.run(
-        ["git", "patch-id", "--stable"],
-        input=current.stdout, text=True, capture_output=True, check=False,
-    )
-    if ident.returncode != 0 or not ident.stdout.strip():
+    current_id = _patch_id(current.stdout)
+    if not current_id:
         return False
-    current_id = ident.stdout.split()[0]
-    log = subprocess.run(
-        ["git", "log", base, "-n", "80", "-p", "--pretty=format:commit %H"],
+    commits = subprocess.run(
+        ["git", "rev-list", base, "-n", "40"],
         check=False, text=True, capture_output=True,
     )
-    if log.returncode != 0 or not log.stdout.strip():
+    if commits.returncode != 0:
         return False
-    scanned = subprocess.run(
-        ["git", "patch-id", "--stable"],
-        input=log.stdout, text=True, capture_output=True, check=False,
-    )
-    if scanned.returncode != 0:
-        return False
-    return any(line.split()[0] == current_id for line in scanned.stdout.splitlines() if line.strip())
+    for commit in commits.stdout.splitlines():
+        if not commit or set(commit) == {"0"}:
+            continue
+        shown = subprocess.run(
+            ["git", "show", "--format=", "--patch", commit],
+            check=False, text=True, capture_output=True,
+        )
+        if shown.returncode != 0:
+            continue
+        if _patch_id(shown.stdout) == current_id:
+            return True
+    return False
 
 
 def main(argv: list[str] | None = None) -> int:

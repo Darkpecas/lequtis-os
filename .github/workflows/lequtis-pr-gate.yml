@@ -2,6 +2,9 @@ name: LeQutis PR gate
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+concurrency:
+  group: lequtis-pr-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 permissions:
   contents: write
   pull-requests: write
@@ -16,6 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
@@ -48,15 +52,12 @@ jobs:
         run: |
           set -euo pipefail
           status=missing
+          head="${{ github.event.pull_request.head.sha }}"
           for _ in 1 2 3 4 5 6 7 8; do
-            comments=$(gh api "repos/${REPO}/pulls/${PR}/comments" --jq '[.[] | select(.user.login=="chatgpt-codex-connector[bot]") | .body] | join("\n")')
-            reviews=$(gh api "repos/${REPO}/pulls/${PR}/reviews" --jq '[.[] | select(.user.login=="chatgpt-codex-connector[bot]")] | length')
-            if printf '%s' "$comments" | grep -q 'codex-code-review-finding'; then
-              status=findings
-              break
-            fi
-            if [ "$reviews" != "0" ]; then
-              status=pass
+            gh api "repos/${REPO}/pulls/${PR}/comments" > /tmp/review-comments.json
+            gh api "repos/${REPO}/pulls/${PR}/reviews" > /tmp/reviews.json
+            status=$(python3 -c 'import json,sys; sys.path.insert(0,"."); from integrations.pr_gate import review_status; print(review_status(json.load(open("/tmp/reviews.json")), json.load(open("/tmp/review-comments.json")), sys.argv[1]))' "$head")
+            if [ "$status" != "missing" ]; then
               break
             fi
             sleep 30
@@ -122,7 +123,13 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
         run: |
-          gh pr merge "$PR" --repo "$REPO" --squash
+          expected="${{ github.event.pull_request.head.sha }}"
+          current=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid)
+          if [ "$current" != "$expected" ]; then
+            echo "refusing to merge: head is $current, evaluated $expected"
+            exit 1
+          fi
+          gh pr merge "$PR" --repo "$REPO" --squash --match-head-commit "$expected"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
