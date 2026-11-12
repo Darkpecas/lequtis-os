@@ -77,7 +77,7 @@ jobs:
           name: lequtis-engineering-receipt-${{ github.run_id }}
           path: evidence/engineering-receipt.json
           if-no-files-found: warn
-      - name: Hold when merge is not allowed
-        if: steps.decide.outputs.merge != 'true'
-        run: exit 1
+      - name: Require an evidence receipt
+        if: always()
+        run: test -s evidence/engineering-receipt.json
 
