@@ -281,7 +281,8 @@ jobs:
           fi
 
       - name: Merge only a qualifying harmless change
-        if: steps.decide.outputs.merge == 'true' && steps.gemini.outputs.allow == 'true'
+        # SECURITY HOLD: do not merge until trusted authorization is independently verified.
+        if: ${{ false }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
