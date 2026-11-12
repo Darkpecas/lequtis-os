@@ -1,0 +1,100 @@
+name: LeQutis PR gate
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: pr-gate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Disposable local execution with one transient retry
+        run: python3 core/pr_gate.py run-suite --out evidence/pr-gate-repair.json -- bash tests/run_disposable_evidence.sh
+      - name: Keep the repair receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-gate-repair-${{ github.event.pull_request.number }}
+          path: evidence/pr-gate-repair.json
+          if-no-files-found: warn
+
+  review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Independent static review
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 core/pr_gate.py review
+      - name: Publish the review receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-gate-review-${{ github.event.pull_request.number }}
+          path: evidence/pr-gate-review.json
+          if-no-files-found: warn
+
+  merge:
+    needs: [test, review]
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Recompute the merge decision from checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 core/pr_gate.py merge --pr "${{ github.event.pull_request.number }}" --out evidence/pr-gate-merge.json
+      - name: Auto-merge only when the verifier says merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 core/pr_gate.py apply-merge --receipt evidence/pr-gate-merge.json
+      - name: Publish the merge receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-gate-merge-${{ github.event.pull_request.number }}
+          path: evidence/pr-gate-merge.json
+          if-no-files-found: warn
+
+  readback:
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, 'lequtis-pr-gate')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Read back the merged commit on main
+        run: python3 core/pr_gate.py readback
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr-gate-readback-${{ github.sha }}
+          path: evidence/pr-gate-readback.json
+          if-no-files-found: warn

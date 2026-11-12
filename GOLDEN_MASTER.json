@@ -23,6 +23,11 @@
       "sha256": "cadfbf123afab56bf472cd78f6756f7f76365559b1651a3cb0330bdd51c9370b"
     },
     {
+      "bytes": 27794,
+      "path": "core/pr_gate.py",
+      "sha256": "27bce9b270707d91788eae31ea5ac3fef088aef1cf2c28435290bf8d252975e0"
+    },
+    {
       "bytes": 3773,
       "path": "core/routing_contract.py",
       "sha256": "7b1467cc6abb0c2e32ef428c7c671e0fb2c1915ac6bcd20cc28be226507adaf2"
@@ -57,6 +62,6 @@
     "core",
     "database/schema.sql"
   ],
-  "manifest_sha256": "2284247cfb7d8da7429d1d63bca3a3161e7348e7ad39bc18a94721c6e09a9aa8",
+  "manifest_sha256": "0df05eb4623b2f338c961578b64f58f05d90cc87140d771192c13e590a46426f",
   "schema": "lequtis-golden-master-v1"
 }

@@ -23,7 +23,7 @@ jobs:
         with:
           python-version: '3.13'
       - name: Compile real kernel
-        run: python -m py_compile core/lequtis.py core/workers.py core/skills.py core/verifier.py core/access_parity.py
+        run: python -m py_compile core/lequtis.py core/workers.py core/skills.py core/verifier.py core/access_parity.py core/pr_gate.py
       - name: Disposable integration suite against canonical kernel
         shell: bash
         run: |

@@ -1,0 +1,27 @@
+{
+  "schema": "lequtis-git22-pr4-findings-v1",
+  "source": "Darkpecas/.git22/pull/4",
+  "retrieved": "2026-11-12T01:14:00Z",
+  "access": {
+    "github_api": "404 Not Found for repos/Darkpecas/.git22 and repos/Darkpecas/.git22/pulls/4",
+    "public_page": "404 Not Found for https://github.com/Darkpecas/.git22/pull/4",
+    "commits_observed_by_this_session": null,
+    "files_observed_by_this_session": null
+  },
+  "reported_shape": {
+    "commits": 6,
+    "net_changed_files": 0,
+    "note": "Supplied by the task. This session could not re-count them because the repository is not visible."
+  },
+  "why_commits_can_have_zero_files": "GitHub lists the net diff of the PR head against the base, not the sum of each commit. Squash-merging the same work onto the base, or committing a change and its revert, leaves commits whose combined tree matches the base. The PR then shows commits and zero changed files. There is no remaining blob to recover.",
+  "canonical_comparison": {
+    "repository": "Darkpecas/lequtis-os",
+    "related_pr": "https://github.com/Darkpecas/lequtis-os/pull/4",
+    "related_pr_title": "Port verified LeQutis loop gates from .git22 PR #5",
+    "related_pr_state": "MERGED",
+    "related_pr_changed_files": 27,
+    "conclusion": "The valuable .git22 implementation that was ported is PR #5, already on main via lequtis-os PR #4. An empty net diff has no additional implementation to copy, so nothing from .git22 PR #4 was written over current code."
+  },
+  "recovered_implementation": null,
+  "evidence_label": "LOCAL PROOF, NOT LIVE VPS VERIFIED"
+}

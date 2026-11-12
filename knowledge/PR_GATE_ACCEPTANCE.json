@@ -1,0 +1,48 @@
+{
+  "schema": "lequtis-pr-gate-acceptance-v1",
+  "chain": [
+    "LeQutis",
+    "Oracle/TBQ",
+    "Hermes",
+    "Builder Swarm",
+    "Verifier/Auditor"
+  ],
+  "authority": "LeQutis verifier/auditor",
+  "external_agents": "subordinate",
+  "stages": {
+    "static_validation": "Diff, commits, deny classes, duplicate and empty-net-diff checks. Not execution.",
+    "local_execution": "Disposable tests in GitHub Actions. Not a live Hostinger or VPS proof.",
+    "live_end_to_end": "Only a later read-back of the merged commit on main. Hostinger, Hermes live route, and Telegram stay not_run unless an existing route returns a receipt."
+  },
+  "auto_merge_requires": [
+    "independent_review_pass",
+    "ci_pass",
+    "net_diff_nonempty",
+    "no_blocking_findings",
+    "same_repository",
+    "not_draft",
+    "not_gate_policy_change"
+  ],
+  "deny_auto_merge": [
+    "credentials",
+    "destructive",
+    "production_migration",
+    "unverified_infrastructure",
+    "empty_net_diff",
+    "duplicate",
+    "unverified_completion_claim",
+    "gate_policy_change"
+  ],
+  "repair": {
+    "max_attempts": 2,
+    "allowed": ["rerun_transient_tests"],
+    "forbidden": [
+      "invent_diff_for_empty_pr",
+      "rewrite_kernel",
+      "refresh_golden_master",
+      "production_migrate",
+      "provision_infrastructure"
+    ]
+  },
+  "evidence_label": "LOCAL PROOF, NOT LIVE VPS VERIFIED"
+}

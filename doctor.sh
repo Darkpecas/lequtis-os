@@ -10,7 +10,7 @@ export LEQUTIS_STATE="$test_state"
 
 echo "=== LEQUTIS DOCTOR ==="
 
-python3 -m py_compile core/lequtis.py core/workers.py core/skills.py core/verifier.py core/access_parity.py core/golden_master.py core/failed_hypotheses.py core/routing_contract.py
+python3 -m py_compile core/lequtis.py core/workers.py core/skills.py core/verifier.py core/access_parity.py core/golden_master.py core/failed_hypotheses.py core/routing_contract.py core/pr_gate.py
 python3 core/lequtis.py init
 
 echo
