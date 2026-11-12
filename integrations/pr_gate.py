@@ -65,6 +65,7 @@ def codex_review_status(
     ]
     if findings:
         return "findings"
+    saw_pass = False
     for item in issue_comments:
         if _login(item) != CODEX_BOT:
             continue
@@ -72,7 +73,9 @@ def codex_review_status(
         if status == "findings":
             return "findings"
         if status == "pass":
-            return "pass"
+            saw_pass = True
+    if saw_pass:
+        return "pass"
     matched = [
         item for item in reviews
         if _login(item) == CODEX_BOT and item.get("commit_id") == head_sha

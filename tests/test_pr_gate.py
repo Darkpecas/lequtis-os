@@ -133,6 +133,12 @@ class PrGateTests(unittest.TestCase):
             "body": "<!-- codex-code-review-finding -->",
         }]
         self.assertEqual(codex_review_status([], line, comment, head), "findings")
+        later = summary.replace('"has_any_findings":false', '"has_any_findings":true')
+        ordered = [
+            {"user": {"login": "chatgpt-codex-connector[bot]"}, "body": summary},
+            {"user": {"login": "chatgpt-codex-connector[bot]"}, "body": later},
+        ]
+        self.assertEqual(codex_review_status([], [], ordered, head), "findings")
 
 
 if __name__ == "__main__":
