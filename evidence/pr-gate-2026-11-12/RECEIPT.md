@@ -58,6 +58,7 @@ Prior live refusal receipt on #35: https://github.com/Darkpecas/lequtis-os/actio
 - Result: `merge_allowed: false`, blocking `independent_review_missing`
 - Cause: #35 wait loop ignored Codex summary “completed / no findings” (no formal review object)
 - Local simulation with #38 `codex_review_status.py` against the same head: `ai_review=pass`, `merge_allowed=true`
+- Recorded on the PR as an autonomous recovery note (Europe/Dublin 2026-11-12)
 
 ## Blockers for full AUTO-MERGE demo
 
