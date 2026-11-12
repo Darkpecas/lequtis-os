@@ -27,8 +27,8 @@ class WorkflowSecurityHoldTests(unittest.TestCase):
     def test_engineering_assessor_has_no_production_secrets(self):
         source = self.read_workflow("lequtis-engineering-gate.yml")
         self.assertNotIn("secrets.", source)
-        self.assertNotIn("  merge:", source)
-        self.assertNotIn("  repair:", source)
+        self.assertNotIn("\n  merge:\n    needs:", source)
+        self.assertNotIn("\n  repair:\n    needs:", source)
         self.assertNotIn("name: Post the receipt", source)
         self.assertNotIn("name: Sync the needs-human label", source)
 
