@@ -65,6 +65,15 @@ def destructive_markers(diff_text: str) -> list[str]:
     return found
 
 
+def flatten_pages(payload: Any) -> list[dict[str, Any]]:
+    """Accept one API page or the list of pages from `gh api --paginate --slurp`."""
+    if isinstance(payload, list) and payload and isinstance(payload[0], list):
+        return [item for page in payload for item in page]
+    if isinstance(payload, list):
+        return payload
+    return []
+
+
 def review_status(reviews: list[dict[str, Any]], comments: list[dict[str, Any]], head_sha: str) -> str:
     """Codex counts only when its review or finding is for this head SHA."""
     reviewer = "chatgpt-codex-connector[bot]"

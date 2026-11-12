@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from integrations.pr_gate import decide, destructive_markers, git_files, paths_from_name_status, review_status  # noqa: E402
+from integrations.pr_gate import decide, destructive_markers, flatten_pages, git_files, paths_from_name_status, review_status  # noqa: E402
 
 
 class PrGateTests(unittest.TestCase):
@@ -120,6 +120,8 @@ class PrGateTests(unittest.TestCase):
         self.assertEqual(review_status(reviews, comments, "new"), "missing")
         self.assertEqual(review_status(reviews, [], "old"), "pass")
         self.assertEqual(review_status(reviews, comments, "old"), "findings")
+        paged = flatten_pages([[reviews[0]], []])
+        self.assertEqual(review_status(paged, [], "old"), "pass")
 
     def test_git_diff_detects_an_empty_range(self):
         with tempfile.TemporaryDirectory() as tmp:
