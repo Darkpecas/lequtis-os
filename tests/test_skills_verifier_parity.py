@@ -223,7 +223,9 @@ def test_access_parity(state: Path) -> None:
     L = load_L(state)
     report = L.access_parity()
     assert report["ok"] is True, report
-    assert report["counts"]["gates"] == 12
+    # G01–G12 plus G13_github_pr_engineering_gate
+    assert report["counts"]["gates"] == 13, report
+    assert "G13_github_pr_engineering_gate" in report["gate_ids"]
     print("  PASS")
 
 
