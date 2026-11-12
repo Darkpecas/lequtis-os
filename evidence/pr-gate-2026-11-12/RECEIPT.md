@@ -51,11 +51,19 @@ Disposable `engineering-receipt` → `verify` smoke on isolated `LEQUTIS_STATE` 
 Prior live refusal receipt on #35: https://github.com/Darkpecas/lequtis-os/actions/runs/43133406908  
 (`merge_allowed: False`; also exposed false-positive destructive/duplicate issues now fixed).
 
+## Live disposable attempt (#41)
+
+- PR: https://github.com/Darkpecas/lequtis-os/pull/41
+- Gate run: https://github.com/Darkpecas/lequtis-os/actions/runs/43134635012
+- Result: `merge_allowed: false`, blocking `independent_review_missing`
+- Cause: #35 wait loop ignored Codex summary “completed / no findings” (no formal review object)
+- Local simulation with #38 `codex_review_status.py` against the same head: `ai_review=pass`, `merge_allowed=true`
+
 ## Blockers for full AUTO-MERGE demo
 
-1. First landing of `.github/workflows/lequtis-pr-gate.yml` cannot auto-merge itself (by design).
+1. First landing of hardened `.github/` gate (#38) cannot auto-merge itself (by design).
 2. This agent cannot merge infrastructure PRs via the read-only `gh` policy / missing branch-protection admin.
-3. After #38 is on `main`, open a docs-only disposable PR under `docs/engineering/` to prove AUTO-MERGE live.
+3. After #38 is on `main`, re-run or recreate the docs-only disposable PR to prove AUTO-MERGE live.
 
 ## Hostinger / Telegram
 

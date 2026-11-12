@@ -6,25 +6,21 @@ LeQutis remains the authority. This gate is a subordinate check. It does not
 call Hermes, Telegram, or Hostinger and it does not provision new
 infrastructure. External agents (Cursor, Codex, GitHub Actions) are workers.
 
-`.github/workflows/lequtis-pr-gate.yml` runs on pull requests:
+`.github/workflows/lequtis-pr-gate.yml` runs on pull requests as two jobs:
 
-1. Run the unit suite. On failure, run it once more and record both attempts.
-2. Run `integrations/pr_static_auditor.py` (independent of the implementing
-   agent; deterministic; not a model).
-3. Wait up to four minutes for a Codex review of the **current head SHA**
-   (separate AI reviewer; historical reviews of older commits do not count).
-4. `integrations/pr_gate.py` decides. Auto-merge is allowed only when the diff
-   is non-empty, not already on the base, docs-only Markdown, tests passed,
-   static audit passed, and Codex reported no finding. Rename detection is
-   disabled so a dangerous path moved into `docs/` still fails.
-5. `integrations/engineering_workflow.py` writes one receipt linking
-   task → PR → review → tests → verify → merge decision.
-6. Credentials, `database/migrations/`, `.github/`, Hermes or Hostinger paths,
+1. **verify** (read-only): checkout with `persist-credentials: false`, run the
+   unit suite once and retry once on failure. No repository write token.
+2. **decide** (write): uses trusted policy scripts from `base_ref` when present
+   (bootstrap from the PR tree only if main lacks the helpers). Runs the
+   static auditor and Codex wait, then `pr_gate.py`. Auto-merge is allowed
+   only for non-empty, non-duplicate, docs-only Markdown after tests + static
+   audit + Codex pass. Rename detection is disabled. Merge uses
+   `--match-head-commit` and a per-PR concurrency group.
+3. Credentials, `database/migrations/`, `.github/`, Hermes or Hostinger paths,
    and destructive markers on **added** diff lines are refused.
-7. A PR body that says VERIFIED without a GitHub URL or an `evidence/` path is
+4. A PR body that says VERIFIED without a GitHub URL or an `evidence/` path is
    refused.
-8. Merge uses `gh pr merge --match-head-commit` and a per-PR concurrency group
-   so a newer tip cannot inherit an older green decision.
+5. Merge outcome updates preserve the original `correlation_id`.
 
 ## Investigation note
 

@@ -5,21 +5,23 @@ on:
 concurrency:
   group: lequtis-pr-gate-${{ github.event.pull_request.number }}
   cancel-in-progress: true
-permissions:
-  contents: write
-  pull-requests: write
 jobs:
-  gate:
+  verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
+    permissions:
+      contents: read
     env:
       PYTHONDONTWRITEBYTECODE: "1"
       LEQUTIS_WORKER: deterministic
       LEQUTIS_HERMES_QUERY: ""
+    outputs:
+      tests_passed: ${{ steps.tests.outputs.passed }}
+      test_attempts: ${{ steps.tests.outputs.attempts }}
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -39,14 +41,70 @@ jobs:
           fi
           echo "attempts=$attempts" >> "$GITHUB_OUTPUT"
           echo "passed=$([ "$code" -eq 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          mkdir -p evidence
+          printf 'passed=%s\nattempts=%s\n' "$([ "$code" -eq 0 ] && echo true || echo false)" "$attempts" > evidence/test-result.txt
           exit "$code"
-      - name: Independent static auditor
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr-gate-tests-${{ github.sha }}
+          path: evidence/test-result.txt
+          if-no-files-found: warn
+
+  decide:
+    needs: verify
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      LEQUTIS_WORKER: deterministic
+      LEQUTIS_HERMES_QUERY: ""
+    steps:
+      - name: Checkout trusted policy from base
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.base_ref }}
+          path: policy
+          persist-credentials: false
+      - name: Checkout PR head for diff only
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          path: pr
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Select policy root
+        id: policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Prefer trusted base policy. Bootstrap from the PR tree only when
+          # main does not yet contain the gate helpers (first landing).
+          if [ -f policy/integrations/pr_gate.py ] \
+            && [ -f policy/integrations/pr_static_auditor.py ] \
+            && [ -f policy/integrations/codex_review_status.py ] \
+            && [ -f policy/integrations/engineering_workflow.py ]; then
+            echo "root=${GITHUB_WORKSPACE}/policy" >> "$GITHUB_OUTPUT"
+            echo "source=base_ref" >> "$GITHUB_OUTPUT"
+          else
+            echo "root=${GITHUB_WORKSPACE}/pr" >> "$GITHUB_OUTPUT"
+            echo "source=bootstrap_pr" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Independent static auditor (trusted policy)
         id: static
         if: always()
         shell: bash
+        working-directory: pr
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
           PR_TITLE: ${{ github.event.pull_request.title }}
+          POLICY: ${{ steps.policy.outputs.root }}
         run: |
           set +e
           git fetch origin "${{ github.base_ref }}"
@@ -58,8 +116,7 @@ jobs:
               ["git", "diff", "--no-renames", "--name-status", f"{base}...HEAD"],
               check=True, text=True, capture_output=True,
           )
-          paths = []
-          seen = set()
+          paths, seen = [], set()
           for line in proc.stdout.splitlines():
               for path in line.split("\t")[1:]:
                   if path and path not in seen:
@@ -69,7 +126,7 @@ jobs:
           PY
           git diff --no-renames "origin/${{ github.base_ref }}...HEAD" > /tmp/pr.diff
           printf '%s' "$PR_BODY" > /tmp/pr-body.md
-          python3 integrations/pr_static_auditor.py \
+          python3 "$POLICY/integrations/pr_static_auditor.py" \
             --files-json "$(cat /tmp/pr-files.json)" \
             --diff-file /tmp/pr.diff \
             --body-file /tmp/pr-body.md \
@@ -87,11 +144,12 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          POLICY: ${{ steps.policy.outputs.root }}
         run: |
           set +e
           status=missing
           for _ in 1 2 3 4 5 6 7 8; do
-            status=$(python3 integrations/codex_review_status.py \
+            status=$(python3 "$POLICY/integrations/codex_review_status.py" \
               --repo "$REPO" --pr "$PR" --head-sha "$HEAD_SHA" | tr -d '\r')
             if [ "$status" = "pass" ] || [ "$status" = "findings" ]; then
               break
@@ -100,12 +158,14 @@ jobs:
           done
           echo "status=${status:-missing}" >> "$GITHUB_OUTPUT"
           exit 0
-      - name: Decide
+      - name: Decide with trusted policy
         id: decide
         if: always()
         shell: bash
+        working-directory: pr
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
+          POLICY: ${{ steps.policy.outputs.root }}
         run: |
           set +e
           git fetch origin "${{ github.base_ref }}"
@@ -113,9 +173,9 @@ jobs:
           mkdir -p evidence
           AI_REVIEW="${{ steps.review.outputs.status }}"
           STATIC="${{ steps.static.outputs.status }}"
-          TESTS="${{ steps.tests.outputs.passed }}"
-          ATTEMPTS="${{ steps.tests.outputs.attempts }}"
-          python3 integrations/pr_gate.py \
+          TESTS="${{ needs.verify.outputs.tests_passed }}"
+          ATTEMPTS="${{ needs.verify.outputs.test_attempts }}"
+          python3 "$POLICY/integrations/pr_gate.py" \
             --base "origin/${{ github.base_ref }}" \
             --head HEAD \
             --body-file /tmp/pr-body.md \
@@ -124,8 +184,6 @@ jobs:
             --static-audit "${STATIC:-findings}" \
             --test-attempts "${ATTEMPTS:-1}" \
             --out evidence/pr-gate-receipt.json
-          code=$?
-          echo "exit=$code" >> "$GITHUB_OUTPUT"
           if [ -f evidence/pr-gate-receipt.json ]; then
             merge=$(python3 -c 'import json; print("true" if json.load(open("evidence/pr-gate-receipt.json", encoding="utf-8"))["merge_allowed"] else "false")')
           else
@@ -136,12 +194,15 @@ jobs:
       - name: Record engineering workflow receipt
         if: always()
         shell: bash
+        working-directory: pr
+        env:
+          POLICY: ${{ steps.policy.outputs.root }}
         run: |
           set +e
           MERGE="${{ steps.decide.outputs.merge }}"
           AI_REVIEW="${{ steps.review.outputs.status }}"
-          TESTS="${{ steps.tests.outputs.passed }}"
-          ATTEMPTS="${{ steps.tests.outputs.attempts }}"
+          TESTS="${{ needs.verify.outputs.tests_passed }}"
+          ATTEMPTS="${{ needs.verify.outputs.test_attempts }}"
           mkdir -p evidence
           GATE_ARGS=()
           STATIC_ARGS=()
@@ -151,7 +212,7 @@ jobs:
           if [ -f evidence/pr-static-audit.json ]; then
             STATIC_ARGS=(--static-audit-file evidence/pr-static-audit.json)
           fi
-          python3 integrations/engineering_workflow.py \
+          python3 "$POLICY/integrations/engineering_workflow.py" \
             --task-id "pr-${{ github.event.pull_request.number }}" \
             --pr-number "${{ github.event.pull_request.number }}" \
             --pr-url "${{ github.event.pull_request.html_url }}" \
@@ -162,14 +223,15 @@ jobs:
             --ai-review "${AI_REVIEW:-missing}" \
             --tests-passed "${TESTS:-false}" \
             --test-attempts "${ATTEMPTS:-1}" \
-            --merge-attempted "${MERGE:-false}" \
-            --merge-result "$([ "${MERGE:-false}" = "true" ] && echo queued || echo refused)" \
+            --merge-attempted false \
+            --merge-result refused \
             --actions-run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             --out evidence/engineering-workflow-receipt.json
           exit 0
       - name: Post the receipt
         if: always()
         shell: bash
+        working-directory: pr
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
@@ -205,6 +267,7 @@ jobs:
           print("tests_passed:", verdict.get("tests_passed"))
           print("test_attempts:", verdict.get("test_attempts"))
           print("correlation_id:", workflow.get("correlation_id"))
+          print("policy_source:", """${{ steps.policy.outputs.source }}""")
           print("live_hermes: false")
           print("live_hostinger: false")
           print("live_telegram: false")
@@ -231,33 +294,30 @@ jobs:
       - name: Update workflow receipt after merge attempt
         if: always() && steps.decide.outputs.merge == 'true'
         shell: bash
+        working-directory: pr
+        env:
+          POLICY: ${{ steps.policy.outputs.root }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set +e
-          AI_REVIEW="${{ steps.review.outputs.status }}"
-          TESTS="${{ steps.tests.outputs.passed }}"
-          ATTEMPTS="${{ steps.tests.outputs.attempts }}"
-          python3 integrations/engineering_workflow.py \
-            --task-id "pr-${{ github.event.pull_request.number }}" \
-            --pr-number "${{ github.event.pull_request.number }}" \
-            --pr-url "${{ github.event.pull_request.html_url }}" \
-            --head-sha "${{ github.event.pull_request.head.sha }}" \
-            --base-ref "${{ github.base_ref }}" \
-            --gate-file evidence/pr-gate-receipt.json \
-            --static-audit-file evidence/pr-static-audit.json \
-            --ai-review "${AI_REVIEW:-missing}" \
-            --tests-passed "${TESTS:-false}" \
-            --test-attempts "${ATTEMPTS:-1}" \
+          python3 "$POLICY/integrations/engineering_workflow.py" \
+            --update-receipt-file evidence/engineering-workflow-receipt.json \
             --merge-attempted true \
             --merge-result "${{ steps.merge.outputs.result || 'failed' }}" \
-            --actions-run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             --out evidence/engineering-workflow-receipt.json
+          CORR=$(python3 -c 'import json; print(json.load(open("evidence/engineering-workflow-receipt.json", encoding="utf-8"))["correlation_id"])')
+          gh pr comment "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" \
+            --body "LeQutis PR gate merge update
+          correlation_id: ${CORR}
+          merge_result: ${{ steps.merge.outputs.result || 'failed' }}
+          LOCAL PROOF, NOT LIVE VPS VERIFIED"
           exit 0
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: pr-gate-${{ github.sha }}
           path: |
-            evidence/pr-gate-receipt.json
-            evidence/pr-static-audit.json
-            evidence/engineering-workflow-receipt.json
+            pr/evidence/pr-gate-receipt.json
+            pr/evidence/pr-static-audit.json
+            pr/evidence/engineering-workflow-receipt.json
           if-no-files-found: warn

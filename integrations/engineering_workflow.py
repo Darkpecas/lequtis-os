@@ -48,9 +48,10 @@ def build_receipt(
     merge_attempted: bool = False,
     merge_result: str | None = None,
     actions_run_url: str | None = None,
+    correlation_id: str | None = None,
 ) -> dict[str, Any]:
     """Assemble one workflow receipt. Does not claim live Hermes/Telegram."""
-    correlation_id = "eng-" + uuid.uuid4().hex
+    correlation_id = correlation_id or ("eng-" + uuid.uuid4().hex)
     task = task_id or ("pr-" + str(pr_number) if pr_number is not None else correlation_id)
     stages = {
         "build": {"status": "recorded", "head_sha": head_sha, "base_ref": base_ref},
@@ -108,6 +109,27 @@ def write_receipt(path: Path, receipt: dict[str, Any]) -> Path:
     return path
 
 
+def update_merge_outcome(
+    receipt: dict[str, Any],
+    *,
+    merge_attempted: bool,
+    merge_result: str,
+) -> dict[str, Any]:
+    """Preserve correlation_id while recording the final merge outcome."""
+    updated = dict(receipt)
+    stages = dict(updated.get("stages") or {})
+    auto_merge = dict(stages.get("auto_merge") or {})
+    auto_merge["attempted"] = merge_attempted
+    auto_merge["result"] = merge_result
+    stages["auto_merge"] = auto_merge
+    updated["stages"] = stages
+    updated["updated"] = _utc_now()
+    updated["receipt_sha256"] = _sha256(
+        {k: v for k, v in updated.items() if k != "receipt_sha256"}
+    )
+    return updated
+
+
 def event_payload(receipt: dict[str, Any]) -> dict[str, Any]:
     """Shape suitable for LeQutis hash-chained events without importing the kernel."""
     return {
@@ -139,8 +161,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--merge-attempted", choices=("true", "false"), default="false")
     parser.add_argument("--merge-result")
     parser.add_argument("--actions-run-url")
+    parser.add_argument("--correlation-id")
+    parser.add_argument(
+        "--update-receipt-file",
+        help="Existing receipt to update in place, preserving correlation_id",
+    )
     parser.add_argument("--out", required=True)
     args = parser.parse_args(argv)
+    if args.update_receipt_file:
+        existing = json.loads(Path(args.update_receipt_file).read_text(encoding="utf-8"))
+        receipt = update_merge_outcome(
+            existing,
+            merge_attempted=args.merge_attempted == "true",
+            merge_result=args.merge_result or "unknown",
+        )
+        write_receipt(Path(args.out), receipt)
+        sys.stdout.write(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+        return 0
     gate = json.loads(Path(args.gate_file).read_text(encoding="utf-8")) if args.gate_file else None
     static = (
         json.loads(Path(args.static_audit_file).read_text(encoding="utf-8"))
@@ -164,6 +201,7 @@ def main(argv: list[str] | None = None) -> int:
         merge_attempted=args.merge_attempted == "true",
         merge_result=args.merge_result,
         actions_run_url=args.actions_run_url,
+        correlation_id=args.correlation_id,
     )
     write_receipt(Path(args.out), receipt)
     sys.stdout.write(json.dumps(receipt, indent=2, sort_keys=True) + "\n")

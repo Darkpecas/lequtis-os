@@ -12,6 +12,7 @@ from integrations.engineering_workflow import (  # noqa: E402
     SCHEMA,
     build_receipt,
     event_payload,
+    update_merge_outcome,
     write_receipt,
 )
 
@@ -53,6 +54,21 @@ class EngineeringWorkflowTests(unittest.TestCase):
             loaded = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(loaded["task_id"], "t1")
             self.assertEqual(loaded["receipt_sha256"], receipt["receipt_sha256"])
+
+    def test_update_merge_outcome_preserves_correlation_id(self):
+        receipt = build_receipt(
+            task_id="t1",
+            tests_passed=True,
+            test_attempts=1,
+            correlation_id="eng-fixed-id",
+        )
+        updated = update_merge_outcome(
+            receipt, merge_attempted=True, merge_result="merged"
+        )
+        self.assertEqual(updated["correlation_id"], "eng-fixed-id")
+        self.assertTrue(updated["stages"]["auto_merge"]["attempted"])
+        self.assertEqual(updated["stages"]["auto_merge"]["result"], "merged")
+        self.assertNotEqual(updated["receipt_sha256"], receipt["receipt_sha256"])
 
 
 if __name__ == "__main__":
