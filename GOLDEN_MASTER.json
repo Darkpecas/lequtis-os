@@ -8,6 +8,11 @@
       "sha256": "f499751052d6436c10a796c30000277d76594dbcc69f379f16caf2db922c8d9e"
     },
     {
+      "bytes": 9312,
+      "path": "core/canonical_write.py",
+      "sha256": "e7e2b9dbb27605fdaa2965ada4d5024358367d6f10a8d8768f39387401ebc657"
+    },
+    {
       "bytes": 6086,
       "path": "core/failed_hypotheses.py",
       "sha256": "2ec45c7c32a5bb9e95eb9f0ffc17f65b7c21069b26970610c876592b0e99566e"
@@ -57,6 +62,6 @@
     "core",
     "database/schema.sql"
   ],
-  "manifest_sha256": "21e2bfed433fea0d52e0b6d484b3f007cf53ce4025c3f651bbb78d1120d31717",
+  "manifest_sha256": "2bf64e625bf8df3d15f91010796d0940481683b923a83e149845811f6c0940a5",
   "schema": "lequtis-golden-master-v1"
 }
