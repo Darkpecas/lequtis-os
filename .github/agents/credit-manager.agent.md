@@ -79,7 +79,7 @@ This is a **draft to use only through a no-cost stop/cancel control or when a mo
 
 At review time, PRs #34, #35, and #37 contained Cursor Background Agent links; #34 is an open cancellation/schema hardening proposal with local test claims, #35 is merged, and #37 is closed unmerged. Current main includes commit `00da626259d90e8468aa83c7f75365fc1625423a`, which removed automatic PR merge/repair authority and keeps manual merge. PR #49 remains an open harvested hardening proposal. These records establish automated repository work, but they do **not** identify the selected model, the account pool, or actual credits consumed.
 
-The current LeQutis independent-review workflow calls Gemini by default and has an explicit opt-in for a paid non-Gemini provider. That is a separate API meter; it is not evidence that Gemini or GitHub Actions depleted a Grok/Cursor subscription pool. Keep that distinction in every report.
+The current LeQutis independent-review workflow triggers on opened, synchronized, reopened, and ready-for-review PR events. Its step passes the Gemini API key but does not expose a custom model, endpoint, or paid-provider opt-in; the current workflow therefore uses the default Gemini route. The reviewer code only permits a non-Gemini provider when `LEQUTIS_REVIEWER_ALLOW_PAID=1`, and that variable is not wired by the workflow. This is a separate Gemini API meter; it is not evidence that Gemini or GitHub Actions depleted a Grok/Cursor subscription pool. Keep that distinction in every report.
 
 ## Response format
 
