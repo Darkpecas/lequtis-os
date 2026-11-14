@@ -14,6 +14,81 @@ LIVE LOOP ledger contract. **Not deployed. Not a Hostinger live proof.**
 
 `hermes_query` never writes LeQutis intent, events, evaluation, memory, or agenda.
 
+## Optional canonical intake write gate
+
+**Intake only — held for approval, not an execution queue.** Both agenda and
+task rows persist as `awaiting_approval`. Neither existing `run_loop` nor
+`run_once`/daemon selects these rows. No approval/promotion tool is exposed.
+Use `lequtis_canonical_read` to recover held submissions; existing `unfinished`
+and open-agenda counters do not include this status. A future approved dispatcher
+needs explicit action-specific acceptance and compatibility checks before it may
+release a submission. Do not change the status to `open`/`pending` as a shortcut:
+the existing `run_loop` treats successful `inspect_status` as enough to close its
+linked agenda, while `run_once` supports a different `remember` execution path.
+The intake gate deliberately grants neither execution mode approval.
+
+`lequtis_canonical_write` and `lequtis_canonical_read` are absent by default.
+The trusted stdio host must set `LEQUTIS_CANONICAL_WRITE=1`, a validated
+`LEQUTIS_WRITE_PRINCIPAL` and `LEQUTIS_TRUSTED_LOCAL_TRANSPORT=1` (its
+attestation that the process is reachable only over a trusted local transport)
+before starting the adapter; without the attestation both tools refuse with
+`trusted_transport_not_attested`. This principal is the
+host-authenticated caller binding, not a request parameter. Only bind one
+principal per stdio process; do not expose the process to untrusted clients.
+No web/HTTP authentication, transport, host deployment or live route is added.
+
+The write gate opens only the existing kernel database selected by `LEQUTIS_DB`
+or `$LEQUTIS_STATE/lequtis.db`, using SQLite `mode=rw`; one of those variables
+must be set explicitly (`explicit_state_required`). It refuses missing,
+symlinked (database file or its state directory), non-WAL or incompatible database paths and never initializes or
+migrates one. The symlink check is performed before opening; concurrent path
+replacement is not covered by this guard.
+It validates fields and the existing event chain, then uses one
+`BEGIN IMMEDIATE` transaction to persist:
+
+- one agenda row and one allowlisted task intent, both `awaiting_approval`;
+- one memory row marked `submitted_<kind>`, never trusted semantic promotion;
+- one `canonical.intake` hash-chained event containing the receipt claim,
+  request digest, principal and row IDs.
+
+The entire intake commits or rolls back. Principal-scoped idempotency keys
+replay unchanged requests without duplication and refuse altered requests.
+A new connection reads the committed rows and checks stored bindings before
+returning. `lequtis_canonical_read` offers a separate read-back invocation.
+Stored receipts remain `unverified_claim`: hashing establishes content
+integrity, not truth, producer authentication or successful execution.
+The gate does not execute work, mark it done, or enable Hermes queries.
+
+Example write-tool arguments (JSON, maximum 64 KiB):
+
+```json
+{
+  "idempotency_key": "ios-observation-001",
+  "title": "Inspect current kernel status",
+  "action": "inspect_status",
+  "payload": {},
+  "receipt": {"source": "iphone", "observation": "Operator requested inspection"},
+  "memory": {"kind": "episodic", "content": "Submitted inspection request"}
+}
+```
+
+Read-tool arguments: `{"idempotency_key":"ios-observation-001"}`.
+Actions: `inspect_status`, `store_note`, `ping`, `deliberate_fail`.
+Memory kinds accepted: `semantic`, `episodic`, `working`; all persist with a
+`submitted_` prefix. Unknown request fields, caller principals, SQL and paths
+are not accepted. Sensitive values intentionally submitted in payloads are
+persisted; callers must not include credentials in receipts or notes.
+
+Disposable acceptance:
+
+```sh
+python3 tests/test_canonical_write.py
+python3 tests/test_bridge.py
+```
+
+Local proof only. A live host check requires the authorized existing bridge,
+an explicit host write capability and independent read-back on that host.
+
 ## MCP protocol compatibility (2026-11-08 audit)
 
 This reconstructed stdio adapter implements the **legacy 2024-11-05** MCP

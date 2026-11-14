@@ -45,6 +45,38 @@ HERMES_TIMEOUT_SEC = int(os.environ.get("LEQUTIS_HERMES_TIMEOUT_SEC", "30"))
 HERMES_BIN = os.environ.get("LEQUTIS_HERMES_BIN", "hermes")
 
 
+def _write_principal() -> str | None:
+    # The trusted host binds this stdio process to a principal. Never accept a
+    # caller-supplied principal, path, SQL statement, or capability escalation.
+    if os.environ.get("LEQUTIS_CANONICAL_WRITE") != "1":
+        return None
+    principal = os.environ.get("LEQUTIS_WRITE_PRINCIPAL", "")
+    import re
+    return principal if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", principal) else None
+
+
+def tool_canonical_intake(arguments: Any, *, read_only: bool = False) -> dict[str, Any]:
+    principal = _write_principal()
+    if principal is None:
+        return {"ok": False, "live_host": False, "reason": "canonical_write_disabled"}
+    # The host must attest that this stdio process is reachable only over a
+    # trusted local transport before any canonical intake or read is served.
+    if os.environ.get("LEQUTIS_TRUSTED_LOCAL_TRANSPORT") != "1":
+        return {"ok": False, "live_host": False, "reason": "trusted_transport_not_attested"}
+    try:
+        import canonical_write as C
+        if read_only:
+            if not isinstance(arguments, dict) or set(arguments) != {"idempotency_key"}:
+                raise ValueError("request_fields_invalid")
+            return C.read_intake(principal, arguments["idempotency_key"])
+        return C.write_intake(principal, arguments)
+    except (ValueError, TypeError, KeyError, OSError) as exc:
+        # Error messages contain field names only; never echo secrets or input.
+        return {"ok": False, "live_host": False, "reason": str(exc) if isinstance(exc, ValueError) else "canonical_intake_unavailable"}
+    except Exception:
+        return {"ok": False, "live_host": False, "reason": "canonical_intake_unavailable"}
+
+
 def _load_lequtis():
     import lequtis as L  # noqa: WPS433
 
@@ -177,9 +209,42 @@ if HERMES_QUERY_ENABLED:
         }
     )
 
+if _write_principal():
+    TOOLS.extend([
+        {
+            "name": "lequtis_canonical_write",
+            "description": "Atomically record task intent held awaiting approval, an unverified receipt claim and submitted memory in the existing WAL DB. Neither loop engine executes held work; no approval operation is exposed.",
+            "inputSchema": {
+                "type": "object", "additionalProperties": False,
+                "required": ["idempotency_key", "title", "action", "payload", "receipt", "memory"],
+                "properties": {
+                    "idempotency_key": {"type": "string", "maxLength": 128},
+                    "title": {"type": "string", "maxLength": 2000},
+                    "action": {"type": "string", "enum": ["inspect_status", "store_note", "ping", "deliberate_fail"]},
+                    "payload": {"type": "object"}, "receipt": {"type": "object"},
+                    "memory": {"type": "object", "additionalProperties": False,
+                               "required": ["kind", "content"],
+                               "properties": {"kind": {"type": "string", "enum": ["semantic", "episodic", "working"]},
+                                              "content": {"type": "string", "maxLength": 16000}}},
+                },
+            },
+        },
+        {
+            "name": "lequtis_canonical_read",
+            "description": "Independently read back the host principal's canonical intake and check its stored bindings and event chain.",
+            "inputSchema": {"type": "object", "additionalProperties": False,
+                            "required": ["idempotency_key"],
+                            "properties": {"idempotency_key": {"type": "string", "maxLength": 128}}},
+        },
+    ])
+
 
 def call_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, Any]:
     args = arguments or {}
+    if name == "lequtis_canonical_write":
+        return tool_canonical_intake(arguments)
+    if name == "lequtis_canonical_read":
+        return tool_canonical_intake(arguments, read_only=True)
     if name == "lequtis_status":
         return tool_lequtis_status()
     if name == "lequtis_verify_events":
