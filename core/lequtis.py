@@ -550,16 +550,8 @@ def event(event_type: str, payload: dict[str, Any]) -> str:
         return _append_event(db, event_type, payload)
 
 
-def verify_event_chain() -> dict[str, Any]:
-    """Cryptographic verification of the immutable event chain (TEST D)."""
-    with connect() as db:
-        rows = db.execute(
-            """
-            SELECT seq, ts, event_type, payload, previous_hash, event_hash
-            FROM events ORDER BY seq ASC
-            """
-        ).fetchall()
-
+def _verify_event_rows(rows: list[sqlite3.Row]) -> dict[str, Any]:
+    """Verify already-read rows; a caller may hold a SQLite write lock."""
     if not rows:
         return {"ok": True, "count": 0, "tip": "GENESIS"}
 
@@ -592,6 +584,18 @@ def verify_event_chain() -> dict[str, Any]:
         expected_prev = row["event_hash"]
 
     return {"ok": True, "count": len(rows), "tip": expected_prev}
+
+
+def verify_event_chain() -> dict[str, Any]:
+    """Cryptographic verification of the immutable event chain (TEST D)."""
+    with connect() as db:
+        rows = db.execute(
+            """
+            SELECT seq, ts, event_type, payload, previous_hash, event_hash
+            FROM events ORDER BY seq ASC
+            """
+        ).fetchall()
+    return _verify_event_rows(rows)
 
 
 # ---------------------------------------------------------------------------
@@ -2888,7 +2892,7 @@ def main() -> None:
             "loop | run-once | recover | retry | verify | verify-events | "
             "verify-independent | unfinished | complete | commit | claim | "
             "cancel | migrate | daemon | sources | assimilate | ingest | "
-            "search | gates | seed-gates | skills | parity"
+            "search | gates | seed-gates | skills | parity | credits"
         )
         return
 
@@ -3037,6 +3041,11 @@ def main() -> None:
 
     elif cmd == "parity":
         print(json.dumps(access_parity(), indent=2))
+
+    elif cmd == "credits":
+        from credit_manager import CreditManager
+
+        print(json.dumps(CreditManager().report(), indent=2, sort_keys=True))
 
     elif cmd == "skills":
         sub = argv[2] if len(argv) > 2 else "list"

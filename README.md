@@ -86,15 +86,32 @@ LEQUTIS_WORKER=deterministic python3 core/lequtis.py loop
 LEQUTIS_WORKER=script LEQUTIS_WORKER_SCRIPT=/path/to/worker.py python3 core/lequtis.py loop
 
 # OpenAI-compatible HTTP worker (optional)
-LEQUTIS_WORKER=openai LEQUTIS_WORKER_URL=https://api.openai.com/v1/chat/completions \
+LEQUTIS_WORKER_MAX_REQUESTS_PER_DAY=0 LEQUTIS_WORKER=openai LEQUTIS_WORKER_URL=https://api.openai.com/v1/chat/completions \
   LEQUTIS_WORKER_MODEL=gpt-4o-mini LEQUTIS_WORKER_API_KEY=... python3 core/lequtis.py loop
 ```
 
 Unsafe proposals are rejected and fall back to deterministic policy.
 
+Hosted HTTP calls are blocked unless `LEQUTIS_WORKER_MAX_REQUESTS_PER_DAY` is
+set explicitly. Its default is `0`; the hard maximum is 20 requests per UTC
+day. Output is capped at 512 tokens and input at 32,768 characters per request.
+`credits` reports reservations and provider-reported token usage from the
+existing hash-chained LeQutis event ledger. It cannot report currency charges;
+check the provider billing dashboard for that. Failed requests still consume
+their reservation. A custom `script` worker can make its own network calls and
+is outside this HTTP request budget.
+
+```sh
+python3 core/lequtis.py credits
+```
+
 ## Kernel hardening (lequtis-os-kernel-4)
 
 LOCAL PROOF, NOT LIVE VPS VERIFIED.
+
+`GOLDEN_MASTER.json` remains the original immutable kernel snapshot;
+`GOLDEN_MASTER_v2.json` seals the current versioned kernel files. The seal is a
+SHA-256 manifest for drift detection, not a signature or a tamper-proof ledger.
 
 These controls sit on the current kernel. Existing commands, `LEQUTIS_STATE`, and `LEQUTIS_ROOT` still work. `LEQUTIS_DB` selects the database file when it is set; otherwise the file remains `$LEQUTIS_STATE/lequtis.db`.
 

@@ -20,7 +20,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import urllib.error
 import urllib.request
 from typing import Any, Protocol
 
@@ -259,9 +258,19 @@ class OpenAICompatibleWorker:
         self.timeout = timeout
 
     def _chat(self, system: str, user: str) -> dict[str, Any] | None:
+        from credit_manager import CreditManager
+
+        manager = CreditManager()
+        reservation = manager.reserve_request(
+            "openai-compatible", self.model, len(user)
+        )
+        if reservation is None:
+            return None
+        request_id = reservation["request_id"]
         body = {
             "model": self.model,
             "temperature": 0,
+            "max_tokens": reservation["max_output_tokens"],
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -280,13 +289,44 @@ class OpenAICompatibleWorker:
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 raw = json.loads(resp.read().decode("utf-8"))
-        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError):
+        except Exception as exc:  # noqa: BLE001 — provider failures use deterministic fallback
+            manager.finish_request(
+                request_id,
+                "openai-compatible",
+                self.model,
+                "request_failed",
+                error_type=type(exc).__name__,
+            )
             return None
         try:
             content = raw["choices"][0]["message"]["content"]
-            return json.loads(content)
+            parsed = json.loads(content)
         except (KeyError, IndexError, TypeError, json.JSONDecodeError):
+            manager.finish_request(
+                request_id,
+                "openai-compatible",
+                self.model,
+                "invalid_response",
+                usage=raw.get("usage") if isinstance(raw, dict) else None,
+            )
             return None
+        if not isinstance(parsed, dict):
+            manager.finish_request(
+                request_id,
+                "openai-compatible",
+                self.model,
+                "invalid_response",
+                usage=raw.get("usage") if isinstance(raw, dict) else None,
+            )
+            return None
+        recorded = manager.finish_request(
+            request_id,
+            "openai-compatible",
+            self.model,
+            "response_received",
+            usage=raw.get("usage") if isinstance(raw, dict) else None,
+        )
+        return parsed if recorded else None
 
     def propose(self, noticed: dict[str, Any]) -> list[dict[str, Any]] | None:
         system = (

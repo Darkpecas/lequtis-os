@@ -8,6 +8,8 @@ import os
 import shutil
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import patch
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -175,6 +177,146 @@ def test_resume_keeps_existing_task_identity(state: Path) -> None:
     print("  PASS")
 
 
+def test_credit_manager_default_blocks_provider_call(state: Path) -> None:
+    print("TEST WORKERS: credit manager blocks HTTP by default")
+    L = load_L(state)
+    from credit_manager import CreditManager
+    from workers import OpenAICompatibleWorker
+
+    with patch.dict(os.environ, {
+        "LEQUTIS_WORKER_MAX_REQUESTS_PER_DAY": "0",
+        "LEQUTIS_WORKER_MAX_OUTPUT_TOKENS": "128",
+        "LEQUTIS_WORKER_MAX_INPUT_CHARS": "8192",
+    }):
+        worker = OpenAICompatibleWorker("https://provider.invalid/chat", "test-model")
+        with patch("workers.urllib.request.urlopen") as urlopen:
+            assert worker._chat("system", "user") is None
+            urlopen.assert_not_called()
+        report = CreditManager().report()
+        assert report["today"]["requests_reserved"] == 0, report
+        assert report["today"]["requests_denied"] == 1, report
+        assert L.verify_event_chain()["ok"] is True
+    print("  PASS")
+
+
+def test_credit_manager_reserves_and_accounts_atomically(state: Path) -> None:
+    print("TEST WORKERS: bounded reservations and provider usage receipts")
+    L = load_L(state)
+    from credit_manager import CreditManager
+
+    with patch.dict(os.environ, {
+        "LEQUTIS_WORKER_MAX_REQUESTS_PER_DAY": "1",
+        "LEQUTIS_WORKER_MAX_OUTPUT_TOKENS": "128",
+        "LEQUTIS_WORKER_MAX_INPUT_CHARS": "8192",
+    }):
+        manager = CreditManager()
+        first = manager.reserve_request("test-provider", "test-model", 100)
+        assert first is not None
+        second = manager.reserve_request("test-provider", "test-model", 100)
+        assert second is None
+        assert manager.finish_request(
+            first["request_id"], "test-provider", "test-model",
+            "response_received",
+            usage={"prompt_tokens": 17, "completion_tokens": 23, "total_tokens": 40},
+        ) is True
+        report = manager.report()
+        assert report["today"]["requests_reserved"] == 1, report
+        assert report["today"]["requests_denied"] == 1, report
+        assert report["observed_token_totals_all_time"] == {
+            "provider_reported_prompt_tokens": 17,
+            "provider_reported_completion_tokens": 23,
+        }, report
+        assert L.verify_event_chain()["ok"] is True
+    print("  PASS")
+
+
+def test_credit_manager_concurrent_calls_cannot_exceed_cap(state: Path) -> None:
+    print("TEST WORKERS: concurrent provider reservations stay under cap")
+    L = load_L(state)
+    from credit_manager import CreditManager
+
+    with patch.dict(os.environ, {
+        "LEQUTIS_WORKER_MAX_REQUESTS_PER_DAY": "3",
+        "LEQUTIS_WORKER_MAX_OUTPUT_TOKENS": "128",
+        "LEQUTIS_WORKER_MAX_INPUT_CHARS": "8192",
+    }):
+        manager = CreditManager()
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(
+                lambda _index: manager.reserve_request(
+                    "test-provider", "test-model", 100
+                ),
+                range(8),
+            ))
+        assert sum(item is not None for item in results) == 3, results
+        report = manager.report()
+        assert report["today"]["requests_reserved"] == 3, report
+        assert report["today"]["requests_denied"] == 5, report
+        assert L.verify_event_chain()["ok"] is True
+    print("  PASS")
+
+
+def test_credit_manager_http_worker_records_usage(state: Path) -> None:
+    print("TEST WORKERS: HTTP request carries token cap and records usage")
+    L = load_L(state)
+    from credit_manager import CreditManager
+    from workers import OpenAICompatibleWorker
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps({
+                "choices": [{"message": {"content": '{"candidates": []}'}}],
+                "usage": {"prompt_tokens": 19, "completion_tokens": 7},
+            }).encode("utf-8")
+
+    with patch.dict(os.environ, {
+        "LEQUTIS_WORKER_MAX_REQUESTS_PER_DAY": "1",
+        "LEQUTIS_WORKER_MAX_OUTPUT_TOKENS": "64",
+        "LEQUTIS_WORKER_MAX_INPUT_CHARS": "8192",
+    }):
+        worker = OpenAICompatibleWorker(
+            "https://provider.invalid/chat", "test-model", api_key="do-not-persist-key"
+        )
+        with patch("workers.urllib.request.urlopen", return_value=Response()) as urlopen:
+            assert worker._chat("system", "private-prompt-marker") == {"candidates": []}
+            request = urlopen.call_args.args[0]
+            body = json.loads(request.data.decode("utf-8"))
+            assert body["max_tokens"] == 64, body
+            urlopen.assert_called_once()
+        report = CreditManager().report()
+        assert report["today"]["requests_reserved"] == 1, report
+        assert report["observed_token_totals_all_time"] == {
+            "provider_reported_prompt_tokens": 19,
+            "provider_reported_completion_tokens": 7,
+        }, report
+        with L.connect() as db:
+            payloads = [row[0] for row in db.execute("SELECT payload FROM events")]
+        assert all("do-not-persist-key" not in item for item in payloads)
+        assert all("private-prompt-marker" not in item for item in payloads)
+        assert L.verify_event_chain()["ok"] is True
+    print("  PASS")
+
+
+def test_credit_manager_fails_closed_on_corrupt_chain(state: Path) -> None:
+    print("TEST WORKERS: corrupt event chain blocks provider reservation")
+    L = load_L(state)
+    L.heartbeat()
+    with L.connect() as db:
+        db.execute("UPDATE events SET payload='{}' WHERE seq=1")
+    from credit_manager import CreditManager
+
+    with patch.dict(os.environ, {"LEQUTIS_WORKER_MAX_REQUESTS_PER_DAY": "2"}):
+        assert CreditManager().reserve_request("test-provider", "test-model", 100) is None
+    assert L.verify_event_chain()["ok"] is False
+    print("  PASS")
+
+
 def main() -> int:
     base = Path(tempfile.mkdtemp(prefix="lequtis-workers-"))
     try:
@@ -183,6 +325,11 @@ def main() -> int:
         test_unsafe_worker_proposal_rejected(base / "c")
         test_store_note_retry_does_not_duplicate_memory(base / "d")
         test_resume_keeps_existing_task_identity(base / "e")
+        test_credit_manager_default_blocks_provider_call(base / "f")
+        test_credit_manager_reserves_and_accounts_atomically(base / "g")
+        test_credit_manager_concurrent_calls_cannot_exceed_cap(base / "h")
+        test_credit_manager_http_worker_records_usage(base / "i")
+        test_credit_manager_fails_closed_on_corrupt_chain(base / "j")
         print()
         print("=== LEQUTIS WORKER TESTS: ALL PASS ===")
         return 0
