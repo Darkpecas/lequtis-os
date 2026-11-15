@@ -199,6 +199,28 @@ def test_credit_manager_default_blocks_provider_call(state: Path) -> None:
     print("  PASS")
 
 
+def test_credit_manager_counts_system_and_user_input(state: Path) -> None:
+    print("TEST WORKERS: input cap includes system prompt and user message")
+    L = load_L(state)
+    from credit_manager import CreditManager
+    from workers import OpenAICompatibleWorker
+
+    with patch.dict(os.environ, {
+        "LEQUTIS_WORKER_MAX_REQUESTS_PER_DAY": "1",
+        "LEQUTIS_WORKER_MAX_OUTPUT_TOKENS": "128",
+        "LEQUTIS_WORKER_MAX_INPUT_CHARS": "15",
+    }):
+        worker = OpenAICompatibleWorker("https://provider.invalid/chat", "test-model")
+        with patch("workers.urllib.request.urlopen") as urlopen:
+            # Each message alone fits, but together they exceed the cap.
+            assert worker._chat("system prompt", "user prompt") is None
+            urlopen.assert_not_called()
+        report = CreditManager().report()
+        assert report["today"]["requests_reserved"] == 0, report
+        assert report["today"]["requests_denied"] == 1, report
+        assert L.verify_event_chain()["ok"] is True
+    print("  PASS")
+
 def test_credit_manager_reserves_and_accounts_atomically(state: Path) -> None:
     print("TEST WORKERS: bounded reservations and provider usage receipts")
     L = load_L(state)
