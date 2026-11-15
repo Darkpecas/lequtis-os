@@ -200,6 +200,8 @@ def test_d_event_chain(state: Path) -> None:
 
     # Tamper then detect.
     with L.connect() as db:
+        # Append-only trigger blocks ordinary edits; simulate raw-file tampering.
+        db.execute("DROP TRIGGER IF EXISTS events_append_only_no_update")
         db.execute(
             "UPDATE events SET payload='{\"tampered\":true}' WHERE seq=1"
         )

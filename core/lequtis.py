@@ -377,6 +377,19 @@ def init() -> None:
             event_hash TEXT NOT NULL
         );
 
+        -- Append-only ledger: corrections are new events, never edits.
+        CREATE TRIGGER IF NOT EXISTS events_append_only_no_update
+        BEFORE UPDATE ON events
+        BEGIN
+            SELECT RAISE(ABORT, 'events_append_only: UPDATE is not allowed');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS events_append_only_no_delete
+        BEFORE DELETE ON events
+        BEGIN
+            SELECT RAISE(ABORT, 'events_append_only: DELETE is not allowed');
+        END;
+
         CREATE TABLE IF NOT EXISTS tasks (
             id TEXT PRIMARY KEY,
             agenda_id TEXT,

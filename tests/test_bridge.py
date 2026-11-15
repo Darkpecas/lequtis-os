@@ -86,6 +86,8 @@ def test_status_and_chain(state: Path) -> None:
     assert "previous|timestamp|event_type|payload" in verify["formula"]
     # Tamper detection via kernel, then adapter reports failure.
     with L.connect() as db:
+        # Append-only trigger blocks ordinary edits; simulate raw-file tampering.
+        db.execute("DROP TRIGGER IF EXISTS events_append_only_no_update")
         db.execute("UPDATE events SET payload='{\"tampered\":true}' WHERE seq=1")
     broken = adapter.tool_lequtis_verify_events()
     assert broken["ok"] is False
