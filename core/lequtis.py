@@ -1418,13 +1418,127 @@ def list_sources() -> list[dict[str, Any]]:
         return out
 
 
-def _index_text_file(source_id: str, path: Path, rel_path: str, ts: str) -> bool:
-    """Index one text file into knowledge_items. Returns True if written/updated."""
-    text = path.read_text(encoding="utf-8", errors="replace")
-    digest = hashlib.sha256(text.encode()).hexdigest()
+def _knowledge_blob_relpath(digest: str) -> str:
+    """Return the canonical relative path for one SHA-256-addressed source blob."""
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise ValueError("invalid knowledge content hash")
+    return (Path("source_blobs") / digest[:2] / (digest + ".blob")).as_posix()
+
+
+def _persist_knowledge_blob(raw: bytes, digest: str) -> str:
+    """Atomically preserve exact imported bytes without replacing a conflicting blob."""
+    if hashlib.sha256(raw).hexdigest() != digest:
+        raise ValueError("knowledge blob digest does not match its bytes")
+    relpath = _knowledge_blob_relpath(digest)
+    blob_root = DB.parent / "source_blobs"
+    if blob_root.is_symlink():
+        raise RuntimeError("refusing symlink at knowledge blob directory")
+    blob_root.mkdir(parents=True, exist_ok=True)
+    shard = blob_root / digest[:2]
+    if shard.is_symlink():
+        raise RuntimeError("refusing symlink at knowledge blob shard")
+    shard.mkdir(exist_ok=True)
+    target = shard / (digest + ".blob")
+    if target.is_symlink():
+        raise RuntimeError("refusing symlink at knowledge blob path")
+    if target.exists():
+        if not target.is_file() or hashlib.sha256(target.read_bytes()).hexdigest() != digest:
+            raise RuntimeError("existing knowledge blob failed content-address check")
+        return relpath
+
+    fd, temp_name = tempfile.mkstemp(prefix=".lequtis-blob-", dir=target.parent)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(raw)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            # A hard-link publishes the complete temp file and refuses to overwrite
+            # a path created by a concurrent importer.
+            os.link(temp_name, target)
+        except FileExistsError:
+            if target.is_symlink() or not target.is_file():
+                raise RuntimeError("concurrent knowledge blob path is not a regular file")
+            if hashlib.sha256(target.read_bytes()).hexdigest() != digest:
+                raise RuntimeError("concurrent knowledge blob failed content-address check")
+    finally:
+        try:
+            os.unlink(temp_name)
+        except FileNotFoundError:
+            pass
+
+    if target.is_symlink() or hashlib.sha256(target.read_bytes()).hexdigest() != digest:
+        raise RuntimeError("published knowledge blob failed content-address check")
+    return relpath
+
+
+def _source_file_is_safe(source_root: Path, path: Path) -> bool:
+    """Reject symlinks and paths that escape the declared source directory."""
+    if source_root.is_symlink() or path.is_symlink():
+        return False
+    try:
+        root_real = source_root.resolve(strict=True)
+        path_real = path.resolve(strict=True)
+        path_real.relative_to(root_real)
+    except (OSError, ValueError):
+        return False
+    cursor = path
+    while cursor != source_root:
+        if cursor.is_symlink():
+            return False
+        parent = cursor.parent
+        if parent == cursor:
+            return False
+        cursor = parent
+    return path.is_file()
+
+
+def _knowledge_event_has_blob(
+    db: sqlite3.Connection, source_id: str, rel_path: str,
+    digest: str, blob_path: str,
+) -> bool:
+    """Check the event ledger for an existing receipt for this exact version."""
+    rows = db.execute(
+        """
+        SELECT payload FROM events
+        WHERE event_type IN ('knowledge.item_indexed', 'knowledge.item_blob_backfilled')
+        ORDER BY seq DESC
+        """
+    ).fetchall()
+    for row in rows:
+        try:
+            payload = json.loads(row["payload"])
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if (
+            payload.get("source_id") == source_id
+            and payload.get("path") == rel_path
+            and payload.get("hash") == digest
+            and payload.get("blob_path") == blob_path
+        ):
+            return True
+    return False
+
+
+def _index_text_file(
+    source_id: str, path: Path, rel_path: str, ts: str,
+    source_root: Path | None = None,
+) -> bool:
+    """Index one file and preserve its exact bytes as an immutable content blob."""
+    if source_root is not None and not _source_file_is_safe(source_root, path):
+        raise ValueError("source file is not a safe regular file inside its source root")
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("source file is not a regular file")
+    raw = path.read_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    text = raw.decode("utf-8", errors="replace")
     excerpt = " ".join(text.split())[:500]
+    blob_path = _persist_knowledge_blob(raw, digest)
     item_id = str(uuid.uuid4())
+    should_remember = False
+
     with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
         existing = db.execute(
             """
             SELECT id, content_hash FROM knowledge_items
@@ -1433,8 +1547,24 @@ def _index_text_file(source_id: str, path: Path, rel_path: str, ts: str) -> bool
             (source_id, rel_path),
         ).fetchone()
         if existing and existing["content_hash"] == digest:
-            return False
+            if _knowledge_event_has_blob(db, source_id, rel_path, digest, blob_path):
+                return False
+            _append_event(
+                db,
+                "knowledge.item_blob_backfilled",
+                {
+                    "id": existing["id"],
+                    "source_id": source_id,
+                    "path": rel_path,
+                    "hash": digest,
+                    "blob_path": blob_path,
+                    "previous_hash": None,
+                    "captured_at": ts,
+                },
+            )
+            return True
         if existing:
+            previous_hash = existing["content_hash"]
             db.execute(
                 """
                 UPDATE knowledge_items
@@ -1445,6 +1575,7 @@ def _index_text_file(source_id: str, path: Path, rel_path: str, ts: str) -> bool
             )
             kid = existing["id"]
         else:
+            previous_hash = None
             db.execute(
                 """
                 INSERT INTO knowledge_items
@@ -1464,15 +1595,90 @@ def _index_text_file(source_id: str, path: Path, rel_path: str, ts: str) -> bool
                 ),
             )
             kid = item_id
-    remember(
-        f"[assimilated:{source_id}:{rel_path}] {excerpt}",
-        kind="knowledge.assimilated",
-    )
-    event(
-        "knowledge.item_indexed",
-        {"id": kid, "source_id": source_id, "path": rel_path, "hash": digest},
-    )
+        _append_event(
+            db,
+            "knowledge.item_indexed",
+            {
+                "id": kid,
+                "source_id": source_id,
+                "path": rel_path,
+                "hash": digest,
+                "blob_path": blob_path,
+                "previous_hash": previous_hash,
+                "captured_at": ts,
+            },
+        )
+        should_remember = True
+
+    if should_remember:
+        remember(
+            f"[assimilated:{source_id}:{rel_path}] {excerpt}",
+            kind="knowledge.assimilated",
+        )
     return True
+
+
+def verify_knowledge_blobs() -> dict[str, Any]:
+    """Verify preserved source bytes referenced by knowledge events."""
+    chain = verify_event_chain()
+    checked = 0
+    legacy_unarchived = 0
+    missing: list[dict[str, Any]] = []
+    corrupt: list[dict[str, Any]] = []
+    with connect() as db:
+        rows = db.execute(
+            """
+            SELECT seq, event_type, payload FROM events
+            WHERE event_type IN ('knowledge.item_indexed', 'knowledge.item_blob_backfilled')
+            ORDER BY seq ASC
+            """
+        ).fetchall()
+    for row in rows:
+        try:
+            payload = json.loads(row["payload"])
+        except (TypeError, json.JSONDecodeError):
+            corrupt.append({"seq": row["seq"], "reason": "invalid_event_payload"})
+            continue
+        digest = payload.get("hash")
+        blob_path = payload.get("blob_path")
+        if not blob_path:
+            legacy_unarchived += 1
+            continue
+        try:
+            expected_path = _knowledge_blob_relpath(digest)
+        except (TypeError, ValueError):
+            corrupt.append({"seq": row["seq"], "reason": "invalid_content_hash"})
+            continue
+        if blob_path != expected_path:
+            corrupt.append({"seq": row["seq"], "reason": "noncanonical_blob_path"})
+            continue
+        blob = DB.parent / Path(expected_path)
+        if (
+            blob.parent.parent.is_symlink()
+            or blob.parent.is_symlink()
+            or blob.is_symlink()
+        ):
+            corrupt.append({"seq": row["seq"], "reason": "symlinked_blob_path", "hash": digest})
+            continue
+        if not blob.is_file():
+            missing.append({"seq": row["seq"], "hash": digest})
+            continue
+        checked += 1
+        try:
+            actual_hash = hashlib.sha256(blob.read_bytes()).hexdigest()
+        except OSError:
+            missing.append({"seq": row["seq"], "hash": digest})
+            continue
+        if actual_hash != digest:
+            corrupt.append({"seq": row["seq"], "reason": "blob_hash_mismatch", "hash": digest})
+    return {
+        "ok": bool(chain.get("ok")) and not missing and not corrupt,
+        "event_chain": chain,
+        "checked": checked,
+        "legacy_unarchived": legacy_unarchived,
+        "missing": missing,
+        "corrupt": corrupt,
+    }
 
 
 _TEXT_SUFFIXES = {".txt", ".md", ".json", ".yaml", ".yml"}
@@ -1517,10 +1723,14 @@ def assimilate_local_evidence() -> dict[str, Any]:
 
     indexed = 0
     remembered = 0
+    skipped_unsafe = 0
     for path in sorted(evidence_dir.iterdir()):
-        if not path.is_file() or path.suffix.lower() not in _TEXT_SUFFIXES:
+        if path.suffix.lower() not in _TEXT_SUFFIXES:
             continue
-        if _index_text_file(source_id, path, path.name, ts):
+        if not _source_file_is_safe(evidence_dir, path):
+            skipped_unsafe += 1
+            continue
+        if _index_text_file(source_id, path, path.name, ts, evidence_dir):
             indexed += 1
             remembered += 1
 
@@ -1531,7 +1741,7 @@ def assimilate_local_evidence() -> dict[str, Any]:
         )
     event(
         "knowledge.assimilate_completed",
-        {"source_id": source_id, "indexed": indexed, "remembered": remembered},
+        {"source_id": source_id, "indexed": indexed, "remembered": remembered, "skipped_unsafe": skipped_unsafe},
     )
     return {
         "ok": True,
@@ -1549,19 +1759,19 @@ def ingest_inbox() -> dict[str, Any]:
     Used when Drive/iCloud/chats are not live-connected to this agent.
     """
     init()
-    register_sources_from_manifest()
     inbox = ROOT / "knowledge" / "inbox"
-    if not inbox.is_dir():
+    if inbox.is_symlink() or not inbox.is_dir():
         return {"ok": False, "reason": "no_inbox", "indexed": 0}
 
     ts = now()
     indexed = 0
+    skipped_unsafe = 0
     by_source: dict[str, int] = {}
-    for source_dir in sorted(p for p in inbox.iterdir() if p.is_dir()):
+    for source_dir in sorted(p for p in inbox.iterdir() if p.is_dir() and not p.is_symlink()):
         source_id = source_dir.name
         with connect() as db:
             exists = db.execute(
-                "SELECT id FROM knowledge_sources WHERE id=?", (source_id,)
+                "SELECT id, status FROM knowledge_sources WHERE id=?", (source_id,)
             ).fetchone()
             if not exists:
                 db.execute(
@@ -1581,19 +1791,22 @@ def ingest_inbox() -> dict[str, Any]:
                         ts,
                     ),
                 )
-            else:
+            elif exists["status"] not in ("reachable", "indexed"):
                 db.execute(
                     "UPDATE knowledge_sources SET status=?, updated=? WHERE id=?",
                     ("reachable", ts, source_id),
                 )
         count = 0
         for path in sorted(source_dir.rglob("*")):
-            if not path.is_file() or path.suffix.lower() not in _TEXT_SUFFIXES:
+            if path.suffix.lower() not in _TEXT_SUFFIXES:
                 continue
             if path.name.lower() == "readme.md":
                 continue
+            if not _source_file_is_safe(source_dir, path):
+                skipped_unsafe += 1
+                continue
             rel = str(path.relative_to(source_dir))
-            if _index_text_file(source_id, path, rel, ts):
+            if _index_text_file(source_id, path, rel, ts, source_dir):
                 indexed += 1
                 count += 1
         if count:
@@ -1604,8 +1817,17 @@ def ingest_inbox() -> dict[str, Any]:
                 )
         by_source[source_id] = count
 
-    event("knowledge.inbox_ingested", {"indexed": indexed, "by_source": by_source})
-    return {"ok": True, "indexed": indexed, "by_source": by_source}
+    if indexed or skipped_unsafe:
+        event(
+            "knowledge.inbox_ingested",
+            {"indexed": indexed, "skipped_unsafe": skipped_unsafe, "by_source": by_source},
+        )
+    return {
+        "ok": True,
+        "indexed": indexed,
+        "skipped_unsafe": skipped_unsafe,
+        "by_source": by_source,
+    }
 
 
 def load_live_loop_gates() -> dict[str, Any]:
