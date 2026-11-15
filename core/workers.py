@@ -261,8 +261,11 @@ class OpenAICompatibleWorker:
         from credit_manager import CreditManager
 
         manager = CreditManager()
+        # Bound the full prompt content sent to the provider, including the
+        # system instructions and the user message.
+        prompt_chars = len(system) + len(user)
         reservation = manager.reserve_request(
-            "openai-compatible", self.model, len(user)
+            "openai-compatible", self.model, prompt_chars
         )
         if reservation is None:
             return None
