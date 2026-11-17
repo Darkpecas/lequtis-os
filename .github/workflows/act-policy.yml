@@ -1,0 +1,23 @@
+name: LeQutis ACT policy regression
+on:
+  pull_request:
+    paths:
+      - 'core/**'
+      - 'tests/test_act_policy.py'
+      - 'tests/test_compositional_policy.py'
+      - '.github/workflows/act-policy.yml'
+  workflow_dispatch:
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: ACT and compositional policy tests
+        run: python -m unittest discover -s tests -p 'test_*policy.py' -v
+      - name: Existing bridge regression
+        run: python tests/test_bridge.py
