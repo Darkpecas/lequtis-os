@@ -102,12 +102,19 @@ class GoldenMasterTests(unittest.TestCase):
             shutil.rmtree(clone)
 
     def test_committed_seal_matches_this_worktree(self):
-        seal_path = ROOT / "GOLDEN_MASTER.json"
-        self.assertTrue(seal_path.is_file(), "GOLDEN_MASTER.json is missing")
+        seal_path = ROOT / "GOLDEN_MASTER_v2.json"
+        self.assertTrue(seal_path.is_file(), "GOLDEN_MASTER_v2.json is missing")
         checked = golden_master.verify(ROOT, seal_path)
         self.assertTrue(checked["ok"], checked)
         document = json.loads(seal_path.read_text(encoding="utf-8"))
-        self.assertNotIn("GOLDEN_MASTER.json", {item["path"] for item in document["files"]})
+        self.assertNotIn("GOLDEN_MASTER_v2.json", {item["path"] for item in document["files"]})
+
+        # Keep the original v1 trust snapshot unchanged as historical evidence.
+        previous = json.loads((ROOT / "GOLDEN_MASTER.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            previous["manifest_sha256"],
+            "2284247cfb7d8da7429d1d63bca3a3161e7348e7ad39bc18a94721c6e09a9aa8",
+        )
 
 
 if __name__ == "__main__":
