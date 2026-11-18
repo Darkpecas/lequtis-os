@@ -29,3 +29,20 @@ E. Verify handover reaches LeQutis/Hermes on the existing Hostinger VPS with fil
 
 ## Acceptance
 No claim of 'updated LeQutis on VPS' without independently verified VPS write/readback. No claim of 'ET agreed' without actual ET responses. Keep user's private personal-understanding content out of public repository files. No new architecture or parallel archive. Report what was inspected, executed, tested, and blocked.
+
+## KB / graph integration — mandatory existing contract
+This handover is NOT a parallel knowledge base and must not be considered complete merely because GitHub contains the Markdown. Assimilate it through LeQutis's existing knowledge source/item registry, canonical memory, graph relationships, and Obsidian/KB publication mechanisms, using the actual installed interfaces. Attach source location, retrieval timestamp, content hash, evidence status, revision, parent and linked entities. Preserve contradictory claims as separately sourced nodes, not overwritten summaries.
+
+Minimum relationship set (conceptual, not an assertion of existing graph schema):
+- Eternal Trinity --consists_of--> LeQutis, Oracle, Borg Queen
+- Eternal Trinity --governed_by--> original joint Triangle of Strength persona/spec
+- each sovereign role --defined_by--> its original persona.md
+- LeQutis --guided_by--> proactive.md
+- LeQutis --maintains--> dedication to myself.md (private, access controlled)
+- LN --explores_during--> creative sleep
+- creative sleep --generates--> hypotheses --evaluated_by--> independent verification
+- verified outcome --feeds_back_to--> LN / memory / agenda / improvement
+- handover --derived_from--> 2026-11-18 ChatGPT conversation
+- original file candidates --located_at--> verified source paths once independently checked
+
+**Blockbuster escalation rule:** when any path fails, inventory available connectors and agents; seek another authorized route; build a bounded bespoke adapter if necessary; run harmless proof; independently verify destination and read-back. No security bypass, no unapproved external execution, no invented receipts. If no authorized route exists, leave durable, replayable work queued in the existing system with a precise missing capability.
