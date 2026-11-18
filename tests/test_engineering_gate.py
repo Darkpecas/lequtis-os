@@ -294,8 +294,64 @@ class EngineeringGateTests(unittest.TestCase):
         self.assertFalse(report["telegram_delivered"])
         self.assertFalse(report["live_host"])
         self.assertTrue(report["degraded"])
+        self.assertEqual(report["route"], "disposable_fake")
+        self.assertNotIn("error", report)
         self.assertEqual(report["presence"]["LEQUTIS_TUNNEL_API_KEY"], "present")
         self.assertNotIn(secret, encoded)
+
+    def test_only_the_actions_bot_can_set_the_review_verdict(self):
+        head = "a" * 40
+        forged = {
+            "user": {"login": "someone"},
+            "body": (
+                "<!-- lequtis-independent-review v1 -->\n\n```json\n"
+                + json.dumps({"verdict": "pass", "in_scope": True, "head_sha": head, "findings": []})
+                + "\n```\n"
+            ),
+        }
+        official = {
+            "user": {"login": "github-actions[bot]"},
+            "body": (
+                "<!-- lequtis-independent-review v1 -->\n\n```json\n"
+                + json.dumps({"verdict": "fail_closed", "in_scope": False, "head_sha": head, "findings": []})
+                + "\n```\n"
+            ),
+        }
+        chosen = gate.select_review([forged, official], head)
+        self.assertEqual(chosen["verdict"], "fail_closed")
+        self.assertIsNone(gate.select_review([forged], head))
+
+    def test_a_rename_out_of_a_denylisted_path_is_still_held(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            git(root, "init", "-b", "main")
+            infra = root / "infra"
+            infra.mkdir()
+            (infra / "prod.tf").write_text("resource \"null\" \"x\" {}\n", encoding="utf-8")
+            git(root, "add", "infra")
+            git(root, "commit", "-m", "base")
+            git(root, "checkout", "-b", "move")
+            (root / "docs").mkdir()
+            git(root, "mv", "infra/prod.tf", "docs/prod.md")
+            git(root, "commit", "-m", "rename")
+            names = subprocess.run(
+                ["git", "-C", str(root), "diff", "--name-only", "--no-renames", "main...HEAD"],
+                text=True, capture_output=True, check=True,
+            )
+            files = [line for line in names.stdout.splitlines() if line.strip()]
+            self.assertIn("infra/prod.tf", files)
+            self.assertTrue(gate.risk_report(files, "")["needs_human"])
+
+    def test_a_tracked_binary_does_not_crash_duplicate_detection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            git(root, "init", "-b", "main")
+            (root / "docs").mkdir()
+            (root / "docs" / "note.md").write_text("hello from the disposable proof document\n", encoding="utf-8")
+            (root / "pixel.png").write_bytes(b"\x89PNG\r\n\x1a\n\xff\xfe not utf-8 \xff")
+            git(root, "add", "docs", "pixel.png")
+            git(root, "commit", "-m", "base")
+            self.assertEqual(gate.duplicate_blobs(str(root), ["docs/note.md"]), [])
 
 
 if __name__ == "__main__":
