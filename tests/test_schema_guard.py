@@ -242,6 +242,25 @@ class SchemaGuardTests(unittest.TestCase):
             self.assertIn("schema guard", refused.stderr)
             self.assertEqual(fingerprint(db), before)
 
+    def test_auxiliary_quoted_table_name_does_not_break_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "extra.db"
+            env = os.environ.copy()
+            env["LEQUTIS_DB"] = str(db)
+            made = subprocess.run(
+                [sys.executable, str(KERNEL), "init"],
+                env=env, text=True, capture_output=True,
+            )
+            self.assertEqual(made.returncode, 0, made.stderr)
+            with sqlite3.connect(db) as con:
+                con.execute('CREATE TABLE "user-settings" (id TEXT)')
+            status = subprocess.run(
+                [sys.executable, str(KERNEL), "status"],
+                env=env, text=True, capture_output=True,
+            )
+            self.assertEqual(status.returncode, 0, status.stderr + status.stdout)
+            self.assertIn("lequtis-os-kernel-4", status.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

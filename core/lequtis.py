@@ -112,6 +112,10 @@ def connect() -> sqlite3.Connection:
     return db
 
 
+def _quote_ident(name: str) -> str:
+    return '"' + str(name).replace('"', '""') + '"'
+
+
 def _columns(db: sqlite3.Connection, table: str) -> set[str] | None:
     rows = db.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
@@ -119,7 +123,7 @@ def _columns(db: sqlite3.Connection, table: str) -> set[str] | None:
     ).fetchall()
     if not rows:
         return None
-    return {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+    return {row[1] for row in db.execute(f"PRAGMA table_info({_quote_ident(table)})")}
 
 
 def _schema_refuse(message: str) -> None:
@@ -161,7 +165,10 @@ def _schema_inventory(db: sqlite3.Connection) -> dict[str, Any]:
         row[0]
         for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")
     }
-    tables = {name: _columns(db, name) for name in names}
+    # Only inspect known kernel tables. An auxiliary name such as
+    # "user-settings" must not be interpolated into PRAGMA table_info.
+    wanted = set(REQUIRED_COLUMNS) | set(PREVIOUS_REQUIRED_COLUMNS)
+    tables = {name: _columns(db, name) for name in wanted if name in names}
     revision = None
     if "identity" in names:
         row = db.execute(
@@ -729,11 +736,15 @@ def add_goal(
 def update_goal(agenda_id: str, status: str) -> None:
     ts = now()
     with connect() as db:
-        db.execute(
-            "UPDATE agenda SET status=?, updated=? WHERE id=?",
+        changed = db.execute(
+            """
+            UPDATE agenda SET status=?, updated=?
+            WHERE id=? AND status!='cancelled' AND cancelled_at IS NULL
+            """,
             (status, ts, agenda_id),
-        )
-    event("agenda.updated", {"id": agenda_id, "status": status})
+        ).rowcount
+    if changed:
+        event("agenda.updated", {"id": agenda_id, "status": status})
 
 
 def status() -> dict[str, Any]:
@@ -831,10 +842,15 @@ def notice() -> dict[str, Any]:
             dict(r)
             for r in db.execute(
                 """
-                SELECT id, title, action, status, idempotency_key
-                FROM tasks
-                WHERE status IN ('pending','running','failed')
-                ORDER BY created ASC
+                SELECT t.id, t.title, t.action, t.status, t.idempotency_key
+                FROM tasks t
+                LEFT JOIN agenda a ON a.id = t.agenda_id
+                WHERE t.status IN ('pending','running','failed')
+                  AND (
+                    t.agenda_id IS NULL
+                    OR (a.cancelled_at IS NULL AND a.status != 'cancelled')
+                  )
+                ORDER BY t.created ASC
                 """
             ).fetchall()
         ]
@@ -966,6 +982,19 @@ def _ensure_task(choice: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
+def _agenda_is_cancelled(agenda_id: str | None) -> bool:
+    if not agenda_id:
+        return False
+    with connect() as db:
+        row = db.execute(
+            "SELECT status, cancelled_at FROM agenda WHERE id=?",
+            (agenda_id,),
+        ).fetchone()
+    return row is not None and (
+        row["status"] == "cancelled" or row["cancelled_at"] is not None
+    )
+
+
 def act(choice: dict[str, Any]) -> dict[str, Any]:
     """ACT: execute a registered safe action; capture failure explicitly."""
     task = _ensure_task(choice)
@@ -981,6 +1010,26 @@ def act(choice: dict[str, Any]) -> dict[str, Any]:
             "ok": True,
             "duplicate": True,
             "result": json.loads(task["result"] or "{}"),
+        }
+
+    agenda_id = task.get("agenda_id") or choice.get("agenda_id")
+    if _agenda_is_cancelled(agenda_id):
+        with connect() as db:
+            db.execute(
+                """
+                UPDATE tasks SET status='cancelled', updated=?
+                WHERE id=? AND status!='completed'
+                """,
+                (now(), task["id"]),
+            )
+        event("task.cancelled", {"id": task["id"], "agenda_id": agenda_id})
+        return {
+            "task_id": task["id"],
+            "ok": False,
+            "cancelled": True,
+            "error": "cancelled",
+            "duplicate": False,
+            "agenda_id": agenda_id,
         }
 
     ts = now()
@@ -1133,6 +1182,11 @@ def update_agenda_from_eval(evaluation: dict[str, Any]) -> dict[str, Any]:
 
     if not agenda_id:
         event("loop.agenda", {"changed": False, "reason": "no_agenda"})
+        return update
+
+    if _agenda_is_cancelled(agenda_id):
+        update["reason"] = "cancelled"
+        event("loop.agenda", update)
         return update
 
     if evaluation["accepted"] and evaluation["verdict"] == "success":
@@ -1895,7 +1949,7 @@ def _claim_next() -> dict[str, Any] | None:
         row = db.execute(
             """
             SELECT id, title FROM agenda
-            WHERE status='open' AND title NOT LIKE 'propose: %'
+            WHERE status='open' AND title NOT GLOB 'propose: *'
             ORDER BY priority DESC, created, id LIMIT 1
             """
         ).fetchone()
@@ -2332,7 +2386,7 @@ def claim_proposal(agenda_id: str | None = None) -> dict[str, Any]:
             row = db.execute(
                 """
                 SELECT id, title FROM agenda
-                WHERE status='open' AND title LIKE 'propose: %'
+                WHERE status='open' AND title GLOB 'propose: *'
                 ORDER BY priority DESC, created, id
                 LIMIT 1
                 """
@@ -2594,10 +2648,28 @@ def _cancel_agenda(
             """,
             (ts, target_id),
         )
+    task_rows = db.execute(
+        """
+        SELECT id FROM tasks
+        WHERE agenda_id=? AND status IN ('pending','running','failed')
+        ORDER BY id
+        """,
+        (target_id,),
+    ).fetchall()
+    task_ids = [row["id"] for row in task_rows]
+    if task_ids:
+        db.execute(
+            """
+            UPDATE tasks SET status='cancelled', updated=?
+            WHERE agenda_id=? AND status IN ('pending','running','failed')
+            """,
+            (ts, target_id),
+        )
     _append_event(db, "agenda.cancelled", {
         "agenda_id": target_id,
         "cancellation_id": cid,
         "execution_ids": execution_ids,
+        "task_ids": task_ids,
         "idempotency_key": idempotency_key,
         "reason": reason,
         "target_kind": "agenda",
@@ -2662,7 +2734,9 @@ def _cancel_execution(
             target_kind="execution",
             target_id=target_id,
         )
-    if row["agenda_status"] == "running":
+    # Only the active attempt may block the agenda. Cancelling an older
+    # interrupted attempt must leave a newer running attempt able to finish.
+    if row["status"] == "running" and row["agenda_status"] == "running":
         db.execute(
             """
             UPDATE agenda SET status='blocked', updated=?

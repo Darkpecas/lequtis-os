@@ -199,6 +199,68 @@ class CancelTests(unittest.TestCase):
         self.assertEqual(again["reason"], "already_committed")
         self.assertEqual(self.query("SELECT COUNT(*) FROM executions WHERE status='succeeded'")[0][0], 1)
 
+    def test_cancelling_an_old_attempt_does_not_block_the_successor(self):
+        self.run_cli("goal", "--key", "packet-old", "propose: packet-old")
+        first = json.loads(self.run_cli("claim").stdout)
+        self.assertEqual(json.loads(self.run_cli("recover").stdout)["recovered"], 1)
+        agenda_id = self.query("SELECT id FROM agenda")[0][0]
+        self.run_cli("retry", agenda_id)
+        second = json.loads(self.run_cli("claim").stdout)
+        self.assertNotEqual(second["execution_id"], first["execution_id"])
+        cancelled = json.loads(self.run_cli(
+            "cancel", "--key", "cancel-old-attempt", "execution", first["execution_id"]
+        ).stdout)
+        self.assertEqual(cancelled["status"], "cancelled")
+        stored = json.loads(self.run_cli(
+            "commit",
+            second["execution_id"],
+            second["lease_token"],
+            json.dumps({"label": "SYNTHETIC", "proposition": "kept"}),
+        ).stdout)
+        self.assertTrue(stored["accepted"])
+        self.assertEqual(self.query("SELECT status FROM agenda")[0][0], "complete")
+        rows = dict(self.query("SELECT id, status FROM executions"))
+        self.assertEqual(rows[first["execution_id"]], "cancelled")
+        self.assertEqual(rows[second["execution_id"]], "succeeded")
+
+    def test_cancelled_agenda_is_not_finished_by_the_task_loop(self):
+        self.run_cli("goal", "--key", "loop-goal", "remember: do not store after cancel")
+        agenda_id = self.query("SELECT id FROM agenda")[0][0]
+        with sqlite3.connect(self.db) as db:
+            db.execute(
+                """
+                INSERT INTO tasks
+                (id,agenda_id,idempotency_key,title,action,status,payload,created,updated)
+                VALUES (?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    "pending-task",
+                    agenda_id,
+                    "pending-task-key",
+                    "pending note",
+                    "store_note",
+                    "pending",
+                    '{"note":"CANCELLED-NOTE-SHOULD-NOT-LAND"}',
+                    "2026-11-12T00:00:00+00:00",
+                    "2026-11-12T00:00:00+00:00",
+                ),
+            )
+        self.run_cli("cancel", "--key", "cancel-loop", "agenda", agenda_id)
+        loop = json.loads(self.run_cli("loop").stdout)
+        self.assertEqual(loop["status"], "completed")
+        self.assertEqual(self.query("SELECT status FROM agenda WHERE id=?", (agenda_id,))[0][0], "cancelled")
+        notes = self.query("SELECT content FROM memory")
+        self.assertNotIn(("CANCELLED-NOTE-SHOULD-NOT-LAND",), notes)
+        self.assertEqual(self.query("SELECT status FROM tasks")[0][0], "cancelled")
+
+    def test_capitalized_propose_prefix_does_not_starve_pull(self):
+        self.run_cli("goal", "--key", "upper", "Propose: capitalized")
+        self.run_cli("goal", "--key", "lower", "propose: ok-packet")
+        claimed = json.loads(self.run_cli("claim").stdout)
+        self.assertEqual(claimed["status"], "claimed")
+        self.assertIn("ok-packet", claimed["title"])
+        self.assertEqual(json.loads(self.run_cli("claim").stdout)["status"], "idle")
+
     def test_remember_goal_cannot_be_committed_as_a_proposal(self):
         self.run_cli("goal", "remember: not a proposal")
         agenda_id = self.query("SELECT id FROM agenda")[0][0]
