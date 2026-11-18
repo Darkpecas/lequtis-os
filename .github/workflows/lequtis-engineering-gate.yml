@@ -1,0 +1,83 @@
+name: LeQutis engineering gate
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+permissions: {}
+concurrency:
+  group: lequtis-engineering-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+jobs:
+  assess:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    outputs:
+      merge: ${{ steps.decide.outputs.merge }}
+      repair: ${{ steps.decide.outputs.repair }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Decide from checks, review, and the denylist
+        id: decide
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          REPO: ${{ github.repository }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+          SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch origin "$BASE_REF"
+          mkdir -p evidence
+          gh api "repos/${REPO}/pulls/${PR}" --jq '.body // ""' > evidence/pr-body.md
+          python3 integrations/engineering_gate.py context \
+            --base "origin/${BASE_REF}" \
+            --head HEAD \
+            --repo "$REPO" \
+            --pr "$PR" \
+            --out evidence/context.json
+          loop=$(python3 -c 'import json; files=json.load(open("evidence/context.json"))["files"]; print("true" if any(p.startswith("core/") or p.startswith("tests/") or p==".github/workflows/lequtis-disposable-gate.yml" for p in files) else "false")')
+          python3 integrations/engineering_gate.py poll \
+            --repo "$REPO" \
+            --sha "$HEAD_SHA" \
+            --attempts 24 \
+            --sleep 15 \
+            --require-loop "$loop" \
+            --out evidence/checks.json
+          python3 integrations/engineering_gate.py collect-review \
+            --repo "$REPO" \
+            --pr "$PR" \
+            --sha "$HEAD_SHA" \
+            --out evidence/review.json
+          python3 integrations/engineering_gate.py assemble \
+            --evidence evidence \
+            --out evidence/request.json
+          python3 integrations/engineering_gate.py evaluate \
+            --request evidence/request.json \
+            --out evidence/engineering-receipt.json
+          python3 integrations/engineering_gate.py outputs \
+            --receipt evidence/engineering-receipt.json
+      - name: Upload the receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lequtis-engineering-receipt-${{ github.run_id }}
+          path: evidence/engineering-receipt.json
+          if-no-files-found: warn
+      - name: Require an evidence receipt
+        if: always()
+        run: test -s evidence/engineering-receipt.json
+

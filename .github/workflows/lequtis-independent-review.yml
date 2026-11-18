@@ -1,0 +1,61 @@
+name: LeQutis independent review
+on:
+  # Trusted workflow definition comes from the base branch, not a PR merge ref.
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted base policy without credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Collect the diff and acceptance criteria
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch origin "$HEAD_SHA"
+          mkdir -p evidence
+          git diff "HEAD...${HEAD_SHA}" > evidence/review.diff
+          gh api "repos/${REPO}/pulls/${PR}" --jq '.body // ""' > evidence/pr-body.md
+          python3 integrations/engineering_gate.py extract-criteria \
+            --body-file evidence/pr-body.md \
+            --out evidence/criteria.txt
+      - name: Review only that packet
+        env:
+          LEQUTIS_REVIEWER_API_KEY: ${{ secrets.LEQUTIS_REVIEWER_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          python3 integrations/independent_reviewer.py \
+            --diff-file evidence/review.diff \
+            --criteria-file evidence/criteria.txt \
+            --head-sha "$HEAD_SHA" \
+            --pr "$PR" \
+            --repo "$REPO" \
+            --out evidence/independent-review.json \
+            --post
+      - name: Save the verdict
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lequtis-independent-review-${{ github.run_id }}
+          path: evidence/independent-review.json
+          if-no-files-found: warn
