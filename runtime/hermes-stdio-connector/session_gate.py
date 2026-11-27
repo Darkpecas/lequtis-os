@@ -19,3 +19,27 @@ def assess(required, observations, session_id, now=None):
             gaps[capability] = 'UNVERIFIED'
     return {'state': 'DEGRADED' if gaps else 'READY', 'gaps': gaps,
             'session_id': session_id, 'scope': 'supplied evidence only'}
+
+def bootstrap(required, trusted_probes, session_id, now=None):
+    """Invoke host-configured probes; never consume caller-supplied receipts.
+
+    Probe registry is a trusted host dependency, not model input. Each probe
+    must independently establish identity and read-only scope.
+    """
+    from uuid import uuid4
+    observations = {}
+    for name in required:
+        probe = trusted_probes.get(name)
+        if not callable(probe):
+            continue
+        try:
+            result = probe()
+            if result is not True:
+                continue
+        except Exception:
+            continue
+        observations[name] = dict(session_id=session_id,
+            observed_at=(now or datetime.now(timezone.utc)).isoformat(),
+            authenticated=True, probe_ok=True, read_only=True,
+            receipt_id=uuid4().hex)
+    return assess(required, observations, session_id, now or datetime.now(timezone.utc))
