@@ -26,6 +26,10 @@ jobs:
         run: python3 tests/test_workers.py
       - name: Stdio connector fail-closed
         run: python3 tests/test_bridge.py
+      - name: Probe-only scope and filesystem isolation
+        run: python3 runtime/hermes-stdio-connector/tests/test_probe_only.py
+      - name: Session readiness regression
+        run: python3 runtime/hermes-stdio-connector/tests/test_session_gate.py
       - name: Preflight contract
         run: python3 tests/test_host_preflight.py
       - name: Hermes route cannot fake live proof
