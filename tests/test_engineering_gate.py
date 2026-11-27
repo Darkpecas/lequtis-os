@@ -273,7 +273,7 @@ class EngineeringGateTests(unittest.TestCase):
         self.assertNotIn("contents: write", review)
         self.assertIn("persist-credentials: false", review)
         self.assertIn("LEQUTIS_REVIEWER_API_KEY", review)
-        self.assertIn("gemini-2.5-flash", (ROOT / "integrations/independent_reviewer.py").read_text(encoding="utf-8"))
+        self.assertIn("gemini-3.8-flash", (ROOT / "integrations/independent_reviewer.py").read_text(encoding="utf-8"))
         self.assertNotIn("contents: write", gate_workflow)
         self.assertNotIn("gh pr merge", gate_workflow)
         self.assertNotIn("gh pr merge", old)

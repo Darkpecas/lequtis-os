@@ -78,7 +78,7 @@ class IndependentReviewerTests(unittest.TestCase):
         self.assertNotIn("reviewer-test-key", json.dumps(failed))
 
     def test_default_provider_is_the_free_gemini_flash_model(self):
-        self.assertEqual(reviewer.DEFAULT_MODEL, "gemini-2.5-flash")
+        self.assertEqual(reviewer.DEFAULT_MODEL, "gemini-3.8-flash")
         endpoint = reviewer.gemini_endpoint(reviewer.DEFAULT_MODEL)
         self.assertEqual(urllib.parse.urlparse(endpoint).hostname, "generativelanguage.googleapis.com")
         os.environ["LEQUTIS_REVIEWER_API_KEY"] = "gemini-test-key"
