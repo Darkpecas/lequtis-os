@@ -13,6 +13,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -248,12 +249,32 @@ def default_transport(url: str, payload: dict[str, Any], _headers: dict[str, str
     if key and (key.encode("utf-8") in encoded or key in endpoint):
         raise RuntimeError("refusing to send the reviewer key in the request body")
     request = urllib.request.Request(endpoint, data=encoded, headers=headers, method="POST")
-    try:
-        with urllib.request.urlopen(request, timeout=60) as response:
-            parsed = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        raise RuntimeError("http_" + str(exc.code)) from exc
+    parsed = _post_with_retries(request)
     return _normalize_model_response(parsed)
+
+
+# Delays before each retry. Gemini answers 429/5xx during overload; those are transient.
+RETRY_DELAYS = (5, 15)
+TRANSIENT_HTTP = frozenset({429, 500, 502, 503, 504})
+
+
+def _post_with_retries(request: urllib.request.Request) -> dict[str, Any]:
+    attempts = len(RETRY_DELAYS) + 1
+    for attempt in range(attempts):
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            if exc.code in TRANSIENT_HTTP and attempt < attempts - 1:
+                time.sleep(RETRY_DELAYS[attempt])
+                continue
+            raise RuntimeError("http_" + str(exc.code)) from exc
+        except (urllib.error.URLError, TimeoutError):
+            if attempt < attempts - 1:
+                time.sleep(RETRY_DELAYS[attempt])
+                continue
+            raise
+    raise RuntimeError("unreachable")
 
 
 def comment_body(result: dict[str, Any], head_sha: str) -> str:
