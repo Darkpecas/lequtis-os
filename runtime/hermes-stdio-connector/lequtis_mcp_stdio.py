@@ -239,7 +239,16 @@ if _write_principal():
     ])
 
 
+# Explicit opt-in for initial least-privilege transport verification.
+PROBE_ONLY = os.environ.get("LEQUTIS_PROBE_ONLY") == "1"
+if PROBE_ONLY:
+    TOOLS = [t for t in TOOLS if t["name"] == "hermes_probe"]
+
 def call_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, Any]:
+    if PROBE_ONLY and name != "hermes_probe":
+        return {"ok": False, "live_host": False, "reason": "probe_only"}
+    if PROBE_ONLY and arguments not in (None, {}):
+        return {"ok": False, "live_host": False, "reason": "invalid_arguments"}
     args = arguments or {}
     if name == "lequtis_canonical_write":
         return tool_canonical_intake(arguments)
@@ -357,9 +366,9 @@ def handshake_once() -> dict[str, Any]:
     tools = handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
     names = [t["name"] for t in (tools or {}).get("result", {}).get("tools", [])]
     return {
-        "ok": init is not None and "lequtis_status" in names,
+        "ok": init is not None and (names == ["hermes_probe"] if PROBE_ONLY else "lequtis_status" in names),
         "tools": names,
-        "hermes_query_enabled": HERMES_QUERY_ENABLED,
+        "hermes_query_enabled": HERMES_QUERY_ENABLED and not PROBE_ONLY,
         "server": (init or {}).get("result", {}).get("serverInfo"),
     }
 
