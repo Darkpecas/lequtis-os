@@ -203,7 +203,11 @@ def review(
     except Exception as exc:  # noqa: BLE001 - fail closed on any model failure
         result["verdict"] = "fail_closed"
         result["in_scope"] = False
-        result["findings"].append(_finding("blocking", "reviewer_api_error: " + type(exc).__name__))
+        detail = type(exc).__name__
+        # Only our own short codes (for example http_404) are safe to echo; never model or key text.
+        if isinstance(exc, RuntimeError) and re.fullmatch(r"(http_\d{3}|paid_provider_refused)", str(exc)):
+            detail += ":" + str(exc)
+        result["findings"].append(_finding("blocking", "reviewer_api_error: " + detail))
         return result
     result["verdict"] = verdict
     result["in_scope"] = in_scope
