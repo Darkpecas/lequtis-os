@@ -21,9 +21,9 @@ from typing import Any, Callable, Mapping
 SCHEMA = "lequtis.independent_review.v1"
 SECRET_NAME = "LEQUTIS_REVIEWER_API_KEY"
 GEMINI_HOST = "generativelanguage.googleapis.com"
-# Current free-tier Flash model. Google's pricing page lists its input and
-# output as free of charge. gemini-2.0-flash is no longer the free default.
-DEFAULT_MODEL = "gemini-3.8-flash"
+# Free-tier Flash model. Confirm current free-tier terms on Google's pricing page;
+# gemini-2.0-flash is no longer the default. Reviewer HTTP errors surface as http_<code>.
+DEFAULT_MODEL = "gemini-2.5-flash"
 MAX_DIFF = 120000
 PACKET_KEYS = frozenset({"acceptance_criteria", "diff"})
 FAIL_CLOSED = (
