@@ -46,7 +46,7 @@ def _check_db() -> dict:
     if not db.is_file():
         return {"ok": False, "path": str(db), "reason": "db_missing"}
     try:
-        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        con = sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True)
         try:
             n = con.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()[0]
         finally:
@@ -74,8 +74,9 @@ def _check_hermes() -> dict:
 
 def run_preflight(*, require_hermes: bool = True) -> dict:
     stdio = _stdio_handshake()
-    core = _check_core()
-    db = _check_db()
+    probe_only = os.environ.get("LEQUTIS_PROBE_ONLY") == "1"
+    core = {"ok": True, "skipped": True} if probe_only else _check_core()
+    db = {"ok": True, "skipped": True} if probe_only else _check_db()
     hermes = _check_hermes()
 
     host_ok = core["ok"] and db["ok"] and (hermes["ok"] if require_hermes else True)
@@ -90,6 +91,7 @@ def run_preflight(*, require_hermes: bool = True) -> dict:
         "ok": exit_code == 0,
         "exit_code": exit_code,
         "live_host": False,
+        "probe_only": probe_only,
         "stdio": stdio,
         "core": core,
         "db": db,
