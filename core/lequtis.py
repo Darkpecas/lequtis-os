@@ -2158,7 +2158,8 @@ def _pause_for(env_name: str, task: dict[str, Any]) -> None:
     folder = Path(pause)
     folder.mkdir(parents=True, exist_ok=True)
     execution_id = task.get("execution_id") or task.get("id")
-    (folder / "claimed").write_text(
+    marker = folder / f".claimed-{uuid.uuid4().hex}.tmp"
+    marker.write_text(
         json.dumps({
             "execution_id": execution_id,
             "lease_token": task["lease_token"],
@@ -2168,6 +2169,7 @@ def _pause_for(env_name: str, task: dict[str, Any]) -> None:
         }),
         encoding="utf-8",
     )
+    os.replace(marker, folder / "claimed")
     deadline = time.time() + 20
     while time.time() < deadline and not (folder / "release").exists():
         time.sleep(0.02)
